@@ -4,7 +4,7 @@ import requests
 class Players(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.place_id = 123456789  # 🔁 your game ID
+        self.place_id = 7243409883  # 🔁 your game ID
 
     @commands.command()
     async def players(self, ctx):
