@@ -29,7 +29,7 @@ from core.models import PermissionLevel
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 
 ROBLOX_API_KEY     = "PASTE_YOUR_ROBLOX_OPEN_CLOUD_API_KEY_HERE"
-ROBLOX_UNIVERSE_ID = "PASTE_YOUR_UNIVERSE_ID_HERE"   # e.g. "123456789"
+ROBLOX_UNIVERSE_ID = "7243409883"   # e.g. "123456789"
 
 BAN_DISPLAY_REASON  = "Banned by server moderation."
 BAN_PRIVATE_REASON  = "Issued via Discord moderation command."
