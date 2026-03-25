@@ -8,16 +8,12 @@ Usage (in Discord):
   Example: .rban xxleoncakewoofxx
 
 SETUP:
-  1. Place this folder (roblox_ban/) inside your Modmail bot's `plugins/` directory.
+  1. Drop this file into your Modmail bot's `plugins/` directory.
   2. Fill in the two configuration values below.
-  3. Restart your bot.
+  3. Paste your server URL (the URL of your API server running this ban queue).
+  4. Restart your bot.
 
-HOW TO GET THE VALUES:
-  - ROBLOX_API_KEY     : https://create.roblox.com/dashboard/credentials
-                         Create a key with "User Restrictions" write permission
-  - ROBLOX_UNIVERSE_ID : Open your game on create.roblox.com — the number in the URL
-
-Permissions: only users with Moderator level or above in the Modmail bot can use .rban.
+Permissions: only users with Moderator level or above in Modmail can use .rban.
 """
 
 import aiohttp
@@ -28,11 +24,8 @@ from core.models import PermissionLevel
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 
-ROBLOX_API_KEY     = "PASTE_YOUR_ROBLOX_OPEN_CLOUD_API_KEY_HERE"
-ROBLOX_UNIVERSE_ID = "7243409883"   # e.g. "123456789"
-
-BAN_DISPLAY_REASON  = "Banned by server moderation."
-BAN_PRIVATE_REASON  = "Issued via Discord moderation command."
+API_SERVER_URL = "https://roblox-ban-server-cpca.onrender.com"
+SHARED_SECRET  = "EMAdabest"  # must match the value in the API server
 
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -43,15 +36,8 @@ class RobloxBan(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # ------------------------------------------------------------------
-    # Roblox: look up user ID from a username
-    # ------------------------------------------------------------------
-
-    async def get_roblox_id(self, username: str) -> tuple[int, str] | tuple[None, None]:
-        """
-        Returns (roblox_id, exact_username) for the given username,
-        or (None, None) if the account doesn't exist.
-        """
+    async def get_roblox_id(self, username: str) -> tuple:
+        """Look up a Roblox user ID by username. Returns (id, exact_name) or (None, None)."""
         url = "https://users.roblox.com/v1/usernames/users"
         payload = {"usernames": [username], "excludeBannedUsers": False}
 
@@ -61,46 +47,21 @@ class RobloxBan(commands.Cog):
                     data = await resp.json()
                     users = data.get("data", [])
                     if users:
-                        user = users[0]
-                        return int(user["id"]), user["name"]
-                    return None, None
-                else:
-                    return None, None
+                        return int(users[0]["id"]), users[0]["name"]
+                return None, None
 
-    # ------------------------------------------------------------------
-    # Roblox Open Cloud: ban the user from the game
-    # ------------------------------------------------------------------
-
-    async def ban_roblox_user(self, roblox_user_id: int) -> bool:
-        """
-        Issues a permanent game ban for the given Roblox user ID.
-        Returns True on success, False on failure.
-        """
-        url = (
-            f"https://apis.roblox.com/cloud/v2/universes/"
-            f"{ROBLOX_UNIVERSE_ID}/user-restrictions/{roblox_user_id}"
-        )
-        headers = {
-            "x-api-key": ROBLOX_API_KEY,
-            "Content-Type": "application/json",
-        }
+    async def queue_ban(self, roblox_user_id: int, roblox_username: str) -> bool:
+        """Post the ban to the API server queue. Returns True on success."""
+        url = f"{API_SERVER_URL.rstrip('/')}/api/bans"
         payload = {
-            "gameJoinRestriction": {
-                "active": True,
-                "duration": None,
-                "privateReason": BAN_PRIVATE_REASON,
-                "displayReason": BAN_DISPLAY_REASON,
-                "excludeAltAccounts": False,
-            }
+            "robloxUserId": roblox_user_id,
+            "robloxUsername": roblox_username,
+            "secret": SHARED_SECRET,
         }
 
         async with aiohttp.ClientSession() as session:
-            async with session.patch(url, headers=headers, json=payload) as resp:
-                return resp.status in (200, 204)
-
-    # ------------------------------------------------------------------
-    # Command: .rban <roblox_username>
-    # ------------------------------------------------------------------
+            async with session.post(url, json=payload) as resp:
+                return resp.status == 201
 
     @commands.command(name="rban")
     @checks.has_permissions(PermissionLevel.MODERATOR)
@@ -108,37 +69,29 @@ class RobloxBan(commands.Cog):
         """Ban a Roblox user by their username. Usage: .rban <username>"""
 
         await ctx.message.delete()
-
-        status_msg = await ctx.send(
-            f"🔍 Looking up Roblox user **{roblox_username}**..."
-        )
+        status_msg = await ctx.send(f"🔍 Looking up Roblox user **{roblox_username}**...")
 
         roblox_id, exact_name = await self.get_roblox_id(roblox_username)
 
         if roblox_id is None:
-            await status_msg.edit(
-                content=f"❌ No Roblox account found for **{roblox_username}**."
-            )
+            await status_msg.edit(content=f"❌ No Roblox account found for **{roblox_username}**.")
             return
 
-        success = await self.ban_roblox_user(roblox_id)
+        success = await self.queue_ban(roblox_id, exact_name)
 
         if success:
             await status_msg.edit(
                 content=(
-                    f"✅ **{exact_name}** has been banned from the Roblox game.\n"
-                    f"*(Banned by {ctx.author.mention})*"
+                    f"✅ **{exact_name}** has been added to the ban queue.\n"
+                    f"The ban will be applied next time a game server is running.\n"
+                    f"*(Queued by {ctx.author.mention})*"
                 )
-            )
-            print(
-                f"[RobloxBan] {ctx.author} banned Roblox user "
-                f"{exact_name} (ID: {roblox_id})."
             )
         else:
             await status_msg.edit(
                 content=(
-                    f"❌ Found **{exact_name}** but failed to ban them. "
-                    "Check that your Roblox API key has the correct permissions."
+                    f"❌ Found **{exact_name}** but failed to queue the ban. "
+                    "Check that your API server is running and the shared secret matches."
                 )
             )
 
