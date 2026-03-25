@@ -29,7 +29,7 @@ from core.models import PermissionLevel
 
 API_SERVER_URL = "https://roblox-ban-server-cpca.onrender.com"
 SHARED_SECRET  = "EMAdabest"  # must match the value in server.py
-LOG_CHANNEL_ID = 0  # paste your log channel ID here, e.g. 1234567890123456789
+LOG_CHANNEL_ID = 1484510887694958622  # paste your log channel ID here, e.g. 1234567890123456789
                     # right-click the channel in Discord > Copy Channel ID
                     # (enable Developer Mode in Discord settings first)
 
