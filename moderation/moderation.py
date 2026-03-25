@@ -79,7 +79,7 @@ class RobloxBan(commands.Cog):
     # ── .rban ────────────────────────────────────────────────────────────────
 
     @commands.command(name="rban")
-    @checks.has_permissions(PermissionLevel.MODERATOR)
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def rban(self, ctx: commands.Context, *, args: str = ""):
         """Ban a Roblox user. Usage: .rban <username> <reason>"""
 
@@ -142,7 +142,7 @@ class RobloxBan(commands.Cog):
     # ── .runban ──────────────────────────────────────────────────────────────
 
     @commands.command(name="runban")
-    @checks.has_permissions(PermissionLevel.MODERATOR)
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def runban(self, ctx: commands.Context, *, roblox_username: str = ""):
         """Unban a Roblox user. Usage: .runban <username>"""
 
