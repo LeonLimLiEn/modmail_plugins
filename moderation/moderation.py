@@ -186,7 +186,7 @@ class RobloxBan(commands.Cog):
     # ── .rkick ───────────────────────────────────────────────────────────────
 
     @commands.command(name="rkick")
-    @checks.has_permissions(PermissionLevel.MODERATOR)
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def rkick(self, ctx: commands.Context, *, args: str = ""):
         """Kick a Roblox user. Usage: .rkick <username> <reason>"""
 
