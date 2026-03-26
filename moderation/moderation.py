@@ -16,10 +16,6 @@ DATASTORE_NAME      = "PlayerData"   # your DataStore name
 DIAMONDS_FIELD      = "Diamonds"     # field inside the saved table (or None if stored directly)
 DIAMONDS_KEY_PREFIX = ""             # prefix before userId, e.g. "Player_" → key = "Player_12345"
 
-# Render server + shared secret (kicks only — no Open Cloud kick API exists)
-KICK_SERVER_URL  = "https://roblox-ban-server-cpca.onrender.com"
-SHARED_SECRET    = "EMAdabest" 
-
 # Discord log channel
 LOG_CHANNEL_NAME = "1484510887694958622"
 
@@ -208,70 +204,7 @@ class RobloxMod(commands.Cog):
         if isinstance(error, commands.CheckFailure):
             await ctx.send("❌ You don't have permission to use this command.")
 
-    # ── .rkick ────────────────────────────────────────────────────────────────
-
-    @commands.command(name="rkick")
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def rkick(self, ctx: commands.Context, *, args: str = ""):
-        """Kick a player via Studio script. Usage: .rkick <username> <reason>"""
-
-        await ctx.message.delete()
-
-        parts = args.strip().split(" ", 1)
-        roblox_username = parts[0] if len(parts) >= 1 else ""
-        reason = parts[1] if len(parts) >= 2 else ""
-
-        if not roblox_username:
-            embed = discord.Embed(title="⚠️ Missing Information", color=discord.Color.orange())
-            embed.add_field(name="Usage",   value="`.rkick <roblox_username> <reason>`",          inline=False)
-            embed.add_field(name="Example", value="`.rkick xxleoncakewoofxx Breaking rules`",     inline=False)
-            await ctx.send(embed=embed)
-            return
-
-        if not reason:
-            embed = discord.Embed(title="⚠️ Missing Reason", color=discord.Color.orange())
-            embed.description = f"Please provide a reason for kicking **{roblox_username}**."
-            embed.add_field(name="Usage", value="`.rkick <roblox_username> <reason>`", inline=False)
-            await ctx.send(embed=embed)
-            return
-
-        status_msg = await ctx.send(f"🔍 Looking up **{roblox_username}**...")
-        roblox_id, exact_name = await self.get_roblox_id(roblox_username)
-
-        if roblox_id is None:
-            embed = discord.Embed(title="❌ User Not Found", color=discord.Color.red())
-            embed.description = f"No Roblox account found for **{roblox_username}**."
-            await status_msg.edit(content=None, embed=embed)
-            return
-
-        payload = {
-            "robloxUserId": roblox_id,
-            "robloxUsername": exact_name,
-            "reason": reason,
-            "secret": SHARED_SECRET,
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(f"{KICK_SERVER_URL}/kicks", json=payload) as resp:
-                success = resp.status == 201
-
-        if success:
-            embed = discord.Embed(title="👢 Kick Queued", color=discord.Color.orange())
-            embed.add_field(name="Roblox Username", value=exact_name, inline=True)
-            embed.add_field(name="Reason",          value=reason, inline=True)
-            embed.add_field(name="Note", value="The player will be kicked the next time the Studio script polls (within 10 seconds), if they are in a server.", inline=False)
-            embed.set_footer(text=f"Kicked by {ctx.author.display_name}")
-            await status_msg.edit(content=None, embed=embed)
-            await self.send_log(embed)
-        else:
-            embed = discord.Embed(title="❌ Kick Failed", color=discord.Color.red())
-            embed.description = f"Could not reach the kick server. Make sure your Render server is running."
-            await status_msg.edit(content=None, embed=embed)
-
-    @rkick.error
-    async def rkick_error(self, ctx, error):
-        if isinstance(error, commands.CheckFailure):
-            await ctx.send("❌ You don't have permission to use this command.")
-
+    
     # ── .rlookup ──────────────────────────────────────────────────────────────
 
     @commands.command(name="rlookup")
