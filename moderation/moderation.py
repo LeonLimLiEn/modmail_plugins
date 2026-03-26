@@ -17,7 +17,7 @@ DIAMONDS_FIELD      = "Diamonds"     # field inside the saved table (or None if 
 DIAMONDS_KEY_PREFIX = ""             # prefix before userId, e.g. "Player_" → key = "Player_12345"
 
 # Discord log channel
-LOG_CHANNEL_NAME = "1484510887694958622"
+LOG_CHANNEL_NAME = "roblox-moderation-logs"
 
 # Open Cloud base URL
 _OC_BASE = "https://apis.roblox.com/cloud/v2"
@@ -76,7 +76,7 @@ class RobloxMod(commands.Cog):
     # ── .rban ─────────────────────────────────────────────────────────────────
 
     @commands.command(name="rban")
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    @checks.has_permissions(PermissionLevel.MODERATOR)
     async def rban(self, ctx: commands.Context, *, args: str = ""):
         """Ban a Roblox user via Open Cloud API. Usage: .rban <username> <reason>"""
 
@@ -152,7 +152,7 @@ class RobloxMod(commands.Cog):
     # ── .runban ───────────────────────────────────────────────────────────────
 
     @commands.command(name="runban")
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    @checks.has_permissions(PermissionLevel.MODERATOR)
     async def runban(self, ctx: commands.Context, *, roblox_username: str = ""):
         """Unban a Roblox user via Open Cloud API. Usage: .runban <username>"""
 
@@ -204,7 +204,6 @@ class RobloxMod(commands.Cog):
         if isinstance(error, commands.CheckFailure):
             await ctx.send("❌ You don't have permission to use this command.")
 
-    
     # ── .rlookup ──────────────────────────────────────────────────────────────
 
     @commands.command(name="rlookup")
@@ -252,11 +251,29 @@ class RobloxMod(commands.Cog):
             )
             friends_data = await friends_resp.json() if friends_resp.status == 200 else {}
 
-            # Badge count
-            badges_resp = await session.get(
-                f"https://badges.roblox.com/v1/users/{roblox_id}/badges?limit=1"
-            )
-            badges_data = await badges_resp.json() if badges_resp.status == 200 else {}
+            # Badge count (FILTERED BY UNIVERSE)
+            badge_count = 0
+            cursor = None
+
+            while True:
+                url = f"https://badges.roblox.com/v1/users/{roblox_id}/badges?limit=100"
+                if cursor:
+                    url += f"&cursor={cursor}"
+
+                badges_resp = await session.get(url)
+                if badges_resp.status != 200:
+                    break
+
+                data = await badges_resp.json()
+
+                for badge in data.get("data", []):
+                    universe = badge.get("awardingUniverse")
+                    if universe and str(universe.get("id")) == str(ROBLOX_UNIVERSE_ID):
+                        badge_count += 1
+
+                cursor = data.get("nextPageCursor")
+                if not cursor:
+                    break
 
             # DataStore — diamonds via Open Cloud
             diamonds = None
@@ -282,7 +299,7 @@ class RobloxMod(commands.Cog):
         created_raw  = user_data.get("created", "")
         is_banned    = user_data.get("isBanned", False)
         friend_count = friends_data.get("count", "N/A")
-        badge_count  = badges_data.get("total", "N/A")
+        badge_count  = badge_count if badge_count is not None else "N/A"
 
         join_date = "Unknown"
         if created_raw:
