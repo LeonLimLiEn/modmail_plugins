@@ -1,3 +1,12 @@
+"""
+Modmail Plugin: Roblox Moderation
+===================================
+Commands:
+  .rban   <roblox_username> <reason>
+  .runban <roblox_username>
+  .rlookup <roblox_username>
+"""
+
 import json
 import aiohttp
 import discord
@@ -5,59 +14,47 @@ from discord.ext import commands
 from core import checks
 from core.models import PermissionLevel
 
-# ─── CONFIGURATION ────────────────────────────────────────────────────────────
+ROBLOX_API_KEY = "PASTE_YOUR_OPEN_CLOUD_API_KEY_HERE"
+ROBLOX_UNIVERSE_ID = "PASTE_YOUR_UNIVERSE_ID_HERE"
 
-# Roblox Open Cloud (bans, unbans, DataStore lookups)
-ROBLOX_API_KEY      = "PASTE_YOUR_OPEN_CLOUD_API_KEY_HERE"
-ROBLOX_UNIVERSE_ID  = "PASTE_YOUR_UNIVERSE_ID_HERE"
+DATASTORE_NAME = "PlayerData"
+DIAMONDS_FIELD = "Diamonds"
+DIAMONDS_KEY_PREFIX = ""
 
-# DataStore config for diamond lookup
-DATASTORE_NAME      = "PlayerData"   # your DataStore name
-DIAMONDS_FIELD      = "Diamonds"     # field inside the saved table (or None if stored directly)
-DIAMONDS_KEY_PREFIX = ""             # prefix before userId, e.g. "Player_" → key = "Player_12345"
+LOG_CHANNEL_NAME = "roblox-mod-logs"
 
-# Discord log channel
-LOG_CHANNEL_NAME = "roblox-moderation-logs"
-
-# Open Cloud base URL
 _OC_BASE = "https://apis.roblox.com/cloud/v2"
 _DS_BASE = "https://apis.roblox.com/datastores/v1"
 
-# ──────────────────────────────────────────────────────────────────────────────
-
 
 class RobloxMod(commands.Cog):
-    """Lets moderators moderate Roblox users directly from Discord."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.log_channel: discord.TextChannel | None = None
+        self.log_channel = None
 
     async def cog_load(self):
-        """Finds or creates the mod-log channel on startup."""
         await self.bot.wait_until_ready()
         guild = self.bot.guild
         if not guild:
             return
+
         existing = discord.utils.get(guild.text_channels, name=LOG_CHANNEL_NAME)
         if existing:
             self.log_channel = existing
         else:
             try:
                 self.log_channel = await guild.create_text_channel(
-                    name=LOG_CHANNEL_NAME,
-                    topic="Roblox moderation logs — bans, unbans, and kicks.",
+                    name=LOG_CHANNEL_NAME
                 )
-                print(f"[RobloxMod] Created log channel: #{LOG_CHANNEL_NAME}")
             except discord.Forbidden:
-                print(f"[RobloxMod] Missing permissions to create #{LOG_CHANNEL_NAME}.")
+                pass
 
-    async def send_log(self, embed: discord.Embed):
+    async def send_log(self, embed):
         if self.log_channel:
             await self.log_channel.send(embed=embed)
 
-    async def get_roblox_id(self, username: str) -> tuple:
-        """Returns (userId, exactName) or (None, None)."""
+    async def get_roblox_id(self, username):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "https://users.roblox.com/v1/usernames/users",
@@ -73,276 +70,113 @@ class RobloxMod(commands.Cog):
     def _oc_headers(self):
         return {"x-api-key": ROBLOX_API_KEY, "Content-Type": "application/json"}
 
-    # ── .rban ─────────────────────────────────────────────────────────────────
+    # ───────────── BAN ─────────────
 
-    @commands.command(name="rban")
+    @commands.command()
     @checks.has_permissions(PermissionLevel.MODERATOR)
-    async def rban(self, ctx: commands.Context, *, args: str = ""):
-        """Ban a Roblox user via Open Cloud API. Usage: .rban <username> <reason>"""
-
+    async def rban(self, ctx, *, args=""):
         await ctx.message.delete()
 
-        parts = args.strip().split(" ", 1)
-        roblox_username = parts[0] if len(parts) >= 1 else ""
-        reason = parts[1] if len(parts) >= 2 else ""
+        parts = args.split(" ", 1)
+        if len(parts) < 2:
+            return await ctx.send("Usage: `.rban <username> <reason>`")
 
-        if not roblox_username:
-            embed = discord.Embed(title="⚠️ Missing Information", color=discord.Color.orange())
-            embed.add_field(name="Usage",   value="`.rban <roblox_username> <reason>`",           inline=False)
-            embed.add_field(name="Example", value="`.rban xxleoncakewoofxx Exploiting in game`",  inline=False)
-            await ctx.send(embed=embed)
-            return
+        username, reason = parts
 
-        if not reason:
-            embed = discord.Embed(title="⚠️ Missing Reason", color=discord.Color.orange())
-            embed.description = f"Please provide a reason for banning **{roblox_username}**."
-            embed.add_field(name="Usage", value="`.rban <roblox_username> <reason>`", inline=False)
-            await ctx.send(embed=embed)
-            return
+        msg = await ctx.send(f"Looking up {username}...")
+        user_id, exact = await self.get_roblox_id(username)
 
-        status_msg = await ctx.send(f"🔍 Looking up **{roblox_username}**...")
-        roblox_id, exact_name = await self.get_roblox_id(roblox_username)
+        if not user_id:
+            return await msg.edit(content="User not found.")
 
-        if roblox_id is None:
-            embed = discord.Embed(title="❌ User Not Found", color=discord.Color.red())
-            embed.description = f"No Roblox account found for **{roblox_username}**."
-            await status_msg.edit(content=None, embed=embed)
-            return
+        url = f"{_OC_BASE}/universes/{ROBLOX_UNIVERSE_ID}/user-restrictions/{user_id}"
 
-        await status_msg.edit(content=f"⏳ Banning **{exact_name}**...")
-
-        url = f"{_OC_BASE}/universes/{ROBLOX_UNIVERSE_ID}/user-restrictions/{roblox_id}"
         payload = {
             "gameJoinRestriction": {
                 "active": True,
                 "duration": "0s",
                 "privateReason": reason,
-                "displayReason": "You have been banned from this experience.",
+                "displayReason": "You are banned.",
                 "excludeAltAccounts": False,
             }
         }
 
         async with aiohttp.ClientSession() as session:
-            async with session.patch(url, headers=self._oc_headers(), json=payload) as resp:
-                success = resp.status == 200
-                error_body = await resp.text() if not success else ""
+            async with session.patch(url, headers=self._oc_headers(), json=payload) as r:
+                if r.status == 200:
+                    await msg.edit(content=f"Banned {exact}")
+                else:
+                    await msg.edit(content="Ban failed.")
 
-        if success:
-            embed = discord.Embed(title="🔨 Player Banned", color=discord.Color.red())
-            embed.add_field(name="Roblox Username", value=exact_name, inline=True)
-            embed.add_field(name="User ID",         value=str(roblox_id), inline=True)
-            embed.add_field(name="Reason",          value=reason, inline=False)
-            embed.set_footer(text=f"Banned by {ctx.author.display_name}")
-            await status_msg.edit(content=None, embed=embed)
-            await self.send_log(embed)
-        else:
-            embed = discord.Embed(title="❌ Ban Failed", color=discord.Color.red())
-            embed.description = (
-                f"Could not ban **{exact_name}**.\n"
-                f"Check your API key has `user-restrictions:write` permission and your Universe ID is correct.\n"
-                f"```{error_body[:300]}```"
-            )
-            await status_msg.edit(content=None, embed=embed)
+    # ───────────── UNBAN ─────────────
 
-    @rban.error
-    async def rban_error(self, ctx, error):
-        if isinstance(error, commands.CheckFailure):
-            await ctx.send("❌ You don't have permission to use this command.")
-
-    # ── .runban ───────────────────────────────────────────────────────────────
-
-    @commands.command(name="runban")
+    @commands.command()
     @checks.has_permissions(PermissionLevel.MODERATOR)
-    async def runban(self, ctx: commands.Context, *, roblox_username: str = ""):
-        """Unban a Roblox user via Open Cloud API. Usage: .runban <username>"""
-
+    async def runban(self, ctx, *, username=""):
         await ctx.message.delete()
 
-        if not roblox_username:
-            embed = discord.Embed(title="⚠️ Missing Username", color=discord.Color.orange())
-            embed.add_field(name="Usage",   value="`.runban <roblox_username>`",  inline=False)
-            embed.add_field(name="Example", value="`.runban xxleoncakewoofxx`",   inline=False)
-            await ctx.send(embed=embed)
-            return
+        msg = await ctx.send(f"Looking up {username}...")
+        user_id, exact = await self.get_roblox_id(username)
 
-        status_msg = await ctx.send(f"🔍 Looking up **{roblox_username}**...")
-        roblox_id, exact_name = await self.get_roblox_id(roblox_username)
+        if not user_id:
+            return await msg.edit(content="User not found.")
 
-        if roblox_id is None:
-            embed = discord.Embed(title="❌ User Not Found", color=discord.Color.red())
-            embed.description = f"No Roblox account found for **{roblox_username}**."
-            await status_msg.edit(content=None, embed=embed)
-            return
+        url = f"{_OC_BASE}/universes/{ROBLOX_UNIVERSE_ID}/user-restrictions/{user_id}"
 
-        await status_msg.edit(content=f"⏳ Unbanning **{exact_name}**...")
-
-        url = f"{_OC_BASE}/universes/{ROBLOX_UNIVERSE_ID}/user-restrictions/{roblox_id}"
         payload = {"gameJoinRestriction": {"active": False}}
 
         async with aiohttp.ClientSession() as session:
-            async with session.patch(url, headers=self._oc_headers(), json=payload) as resp:
-                success = resp.status == 200
-                error_body = await resp.text() if not success else ""
+            async with session.patch(url, headers=self._oc_headers(), json=payload) as r:
+                if r.status == 200:
+                    await msg.edit(content=f"Unbanned {exact}")
+                else:
+                    await msg.edit(content="Unban failed.")
 
-        if success:
-            embed = discord.Embed(title="✅ Player Unbanned", color=discord.Color.green())
-            embed.add_field(name="Roblox Username", value=exact_name, inline=True)
-            embed.add_field(name="User ID",         value=str(roblox_id), inline=True)
-            embed.set_footer(text=f"Unbanned by {ctx.author.display_name}")
-            await status_msg.edit(content=None, embed=embed)
-            await self.send_log(embed)
-        else:
-            embed = discord.Embed(title="❌ Unban Failed", color=discord.Color.red())
-            embed.description = (
-                f"Could not unban **{exact_name}**.\n"
-                f"```{error_body[:300]}```"
-            )
-            await status_msg.edit(content=None, embed=embed)
+    # ───────────── LOOKUP ─────────────
 
-    @runban.error
-    async def runban_error(self, ctx, error):
-        if isinstance(error, commands.CheckFailure):
-            await ctx.send("❌ You don't have permission to use this command.")
-
-# (EVERYTHING ABOVE THIS POINT IS IDENTICAL — NO CHANGES)
-
-# ── .rlookup ──────────────────────────────────────────────────────────────
-
-    @commands.command(name="rlookup")
+    @commands.command()
     @checks.has_permissions(PermissionLevel.MODERATOR)
-    async def rlookup(self, ctx: commands.Context, *, roblox_username: str = ""):
-        """Look up a Roblox user's profile and in-game data. Usage: .rlookup <username>"""
-
+    async def rlookup(self, ctx, *, username=""):
         await ctx.message.delete()
 
-        if not roblox_username:
-            embed = discord.Embed(title="⚠️ Missing Username", color=discord.Color.orange())
-            embed.add_field(name="Usage", value="`.rlookup <roblox_username>`", inline=False)
-            await ctx.send(embed=embed)
-            return
+        msg = await ctx.send(f"Looking up {username}...")
+        user_id, exact = await self.get_roblox_id(username)
 
-        from datetime import datetime
-
-        status_msg = await ctx.send(f"🔍 Looking up **{roblox_username}**...")
-        roblox_id, exact_name = await self.get_roblox_id(roblox_username)
-
-        if roblox_id is None:
-            embed = discord.Embed(title="❌ User Not Found", color=discord.Color.red())
-            embed.description = f"No Roblox account found for **{roblox_username}**."
-            await status_msg.edit(content=None, embed=embed)
-            return
-
-        # Build DataStore key
-        ds_key = f"{DIAMONDS_KEY_PREFIX}{roblox_id}"
+        if not user_id:
+            return await msg.edit(content="User not found.")
 
         async with aiohttp.ClientSession() as session:
-            # Public profile
-            user_resp = await session.get(f"https://users.roblox.com/v1/users/{roblox_id}")
-            user_data = await user_resp.json() if user_resp.status == 200 else {}
 
-            # Avatar headshot
-            avatar_resp = await session.get(
-                f"https://thumbnails.roblox.com/v1/users/avatar-headshot"
-                f"?userIds={roblox_id}&size=150x150&format=Png&isCircular=false"
-            )
-            avatar_data = await avatar_resp.json() if avatar_resp.status == 200 else {}
+            user_resp = await session.get(f"https://users.roblox.com/v1/users/{user_id}")
+            user_data = await user_resp.json()
 
-            # Friend count
             friends_resp = await session.get(
-                f"https://friends.roblox.com/v1/users/{roblox_id}/friends/count"
+                f"https://friends.roblox.com/v1/users/{user_id}/friends/count"
             )
-            friends_data = await friends_resp.json() if friends_resp.status == 200 else {}
+            friends_data = await friends_resp.json()
 
-# Badge count (SAFE FALLBACK VERSION)
-badge_count = 0
-cursor = None
-
-while True:
-    url = f"https://badges.roblox.com/v1/users/{roblox_id}/badges?limit=100"
-    if cursor:
-        url += f"&cursor={cursor}"
-
-    try:
-        badges_resp = await session.get(url)
-        if badges_resp.status != 200:
-            break
-
-        data = await badges_resp.json()
-
-        for badge in data.get("data", []):
-            universe = badge.get("awardingUniverse") or badge.get("universe")
-            if universe and str(universe.get("id")) == str(ROBLOX_UNIVERSE_ID):
-                badge_count += 1
-
-        cursor = data.get("nextPageCursor")
-        if not cursor:
-            break
-
-    except Exception:
-        break
-            # ─────────────────────────────────────────
-
-            # DataStore — diamonds via Open Cloud
-            diamonds = None
-            ds_url = (
-                f"{_DS_BASE}/universes/{ROBLOX_UNIVERSE_ID}"
-                f"/standard-datastores/datastore/entries/entry"
-                f"?datastoreName={DATASTORE_NAME}&entryKey={ds_key}"
-            )
-            ds_resp = await session.get(ds_url, headers={"x-api-key": ROBLOX_API_KEY})
-            if ds_resp.status == 200:
-                raw = await ds_resp.text()
-                try:
-                    parsed = json.loads(raw)
-                    if DIAMONDS_FIELD and isinstance(parsed, dict):
-                        diamonds = parsed.get(DIAMONDS_FIELD)
-                    else:
-                        diamonds = parsed
-                except Exception:
-                    diamonds = None
-
-        display_name = user_data.get("displayName", exact_name)
-        description  = user_data.get("description", "") or ""
-        created_raw  = user_data.get("created", "")
-        is_banned    = user_data.get("isBanned", False)
-        friend_count = friends_data.get("count", "N/A")
-
-        join_date = "Unknown"
-        if created_raw:
+            # SAFE badge count (no crashes)
+            badge_count = 0
             try:
-                dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
-                join_date = dt.strftime("%B %d, %Y")
-            except Exception:
-                join_date = created_raw[:10]
+                badges_resp = await session.get(
+                    f"https://badges.roblox.com/v1/users/{user_id}/badges?limit=10"
+                )
+                if badges_resp.status == 200:
+                    data = await badges_resp.json()
+                    for b in data.get("data", []):
+                        if b.get("awardingUniverse"):
+                            if str(b["awardingUniverse"]["id"]) == str(ROBLOX_UNIVERSE_ID):
+                                badge_count += 1
+            except:
+                pass
 
-        avatar_url = None
-        try:
-            avatar_url = avatar_data["data"][0]["imageUrl"]
-        except (KeyError, IndexError):
-            pass
+        embed = discord.Embed(title=exact)
+        embed.add_field(name="User ID", value=user_id)
+        embed.add_field(name="Friends", value=friends_data.get("count", 0))
+        embed.add_field(name="Badges", value=badge_count)
 
-        embed = discord.Embed(
-            title=f"{'🔨 ' if is_banned else ''}@{exact_name}",
-            url=f"https://www.roblox.com/users/{roblox_id}/profile",
-            color=discord.Color.red() if is_banned else discord.Color.blurple(),
-        )
-        embed.add_field(name="Display Name",  value=display_name,                 inline=True)
-        embed.add_field(name="User ID",       value=str(roblox_id),               inline=True)
-        embed.add_field(name="Joined Roblox", value=join_date,                    inline=True)
-        embed.add_field(name="Friends",       value=str(friend_count),            inline=True)
-        embed.add_field(name="Badges",        value=str(badge_count),             inline=True)
-        embed.add_field(name="Roblox Banned", value="Yes" if is_banned else "No", inline=True)
+        await msg.edit(content=None, embed=embed)
 
-        if diamonds is not None:
-            embed.add_field(name="💎 Diamonds", value=f"{int(diamonds):,}", inline=True)
-        else:
-            embed.add_field(name="💎 Diamonds", value="Not found — check DATASTORE_NAME and DIAMONDS_FIELD in the plugin config.", inline=False)
 
-        if description:
-            embed.add_field(name="About", value=description[:256], inline=False)
-
-        if avatar_url:
-            embed.set_thumbnail(url=avatar_url)
-
-        embed.set_footer(text=f"Looked up by {ctx.author.display_name}")
-        await status_msg.edit(content=None, embed=embed)
+async def setup(bot):
+    await bot.add_cog(RobloxMod(bot))
