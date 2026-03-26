@@ -253,40 +253,33 @@ class RobloxMod(commands.Cog):
             )
             friends_data = await friends_resp.json() if friends_resp.status == 200 else {}
 
-            # ───── NEW BADGE SYSTEM (GUARANTEED) ─────
-            badge_count = 0
+# Badge count (SAFE FALLBACK VERSION)
+badge_count = 0
+cursor = None
 
-            # Step 1: get ALL badges in your universe
-            game_badges = []
-            cursor = None
+while True:
+    url = f"https://badges.roblox.com/v1/users/{roblox_id}/badges?limit=100"
+    if cursor:
+        url += f"&cursor={cursor}"
 
-            while True:
-                url = f"https://badges.roblox.com/v1/universes/{ROBLOX_UNIVERSE_ID}/badges?limit=100"
-                if cursor:
-                    url += f"&cursor={cursor}"
+    try:
+        badges_resp = await session.get(url)
+        if badges_resp.status != 200:
+            break
 
-                resp = await session.get(url)
-                if resp.status != 200:
-                    break
+        data = await badges_resp.json()
 
-                data = await resp.json()
-                game_badges.extend([b["id"] for b in data.get("data", [])])
+        for badge in data.get("data", []):
+            universe = badge.get("awardingUniverse") or badge.get("universe")
+            if universe and str(universe.get("id")) == str(ROBLOX_UNIVERSE_ID):
+                badge_count += 1
 
-                cursor = data.get("nextPageCursor")
-                if not cursor:
-                    break
+        cursor = data.get("nextPageCursor")
+        if not cursor:
+            break
 
-            # Step 2: check which ones the user owns
-            for badge_id in game_badges:
-                url = f"https://badges.roblox.com/v1/users/{roblox_id}/badges/awarded-dates?badgeIds={badge_id}"
-                resp = await session.get(url)
-
-                if resp.status != 200:
-                    continue
-
-                data = await resp.json()
-                if data.get("data"):
-                    badge_count += 1
+    except Exception:
+        break
             # ─────────────────────────────────────────
 
             # DataStore — diamonds via Open Cloud
