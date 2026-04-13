@@ -1,333 +1,305 @@
-import json
-import aiohttp
 import discord
 from discord.ext import commands
-from core import checks
-from core.models import PermissionLevel
+import aiohttp
+import json
+import os
+from datetime import datetime, timezone
 
-# ─── CONFIGURATION ────────────────────────────────────────────────────────────
+# ============================================================
+# CREDENTIALS — fill these in before running
+# ============================================================
+ROBLOX_OPEN_CLOUD_API_KEY = "YOUR_OPEN_CLOUD_API_KEY_HERE"
+ROBLOX_UNIVERSE_ID        = "YOUR_UNIVERSE_ID_HERE"
+LOG_CHANNEL_ID            = 000000000000000000   # paste your log channel ID here
+# ============================================================
 
-# Roblox Open Cloud (bans, unbans, DataStore lookups)
-ROBLOX_API_KEY      = "PASTE_YOUR_OPEN_CLOUD_API_KEY_HERE"
-ROBLOX_UNIVERSE_ID  = "PASTE_YOUR_UNIVERSE_ID_HERE"
-
-# DataStore config for diamond lookup
-DATASTORE_NAME      = "PlayerData"   # your DataStore name
-DIAMONDS_FIELD      = "Diamonds"     # field inside the saved table (or None if stored directly)
-DIAMONDS_KEY_PREFIX = ""             # prefix before userId, e.g. "Player_" → key = "Player_12345"
-
-# Discord log channel
-LOG_CHANNEL_NAME = "roblox-mod-logs"
-
-# Open Cloud base URL
-_OC_BASE = "https://apis.roblox.com/cloud/v2"
-_DS_BASE = "https://apis.roblox.com/datastores/v1"
-
-# ──────────────────────────────────────────────────────────────────────────────
+BANS_FILE = os.path.join(os.path.dirname(__file__), "roblox_bans.json")
 
 
-class RobloxMod(commands.Cog):
-    """Lets moderators moderate Roblox users directly from Discord."""
+def load_bans() -> dict:
+    if os.path.exists(BANS_FILE):
+        with open(BANS_FILE, "r") as f:
+            return json.load(f)
+    return {}
 
-    def __init__(self, bot: commands.Bot):
+
+def save_bans(bans: dict) -> None:
+    with open(BANS_FILE, "w") as f:
+        json.dump(bans, f, indent=2)
+
+
+async def fetch_roblox_user_by_username(session: aiohttp.ClientSession, username: str) -> dict | None:
+    url = "https://users.roblox.com/v1/usernames/users"
+    payload = {"usernames": [username], "excludeBannedUsers": False}
+    async with session.post(url, json=payload) as resp:
+        if resp.status == 200:
+            data = await resp.json()
+            if data.get("data"):
+                return data["data"][0]
+    return None
+
+
+async def fetch_roblox_user_by_id(session: aiohttp.ClientSession, user_id: int) -> dict | None:
+    url = f"https://users.roblox.com/v1/users/{user_id}"
+    async with session.get(url) as resp:
+        if resp.status == 200:
+            return await resp.json()
+    return None
+
+
+async def fetch_roblox_avatar(session: aiohttp.ClientSession, user_id: int) -> str | None:
+    url = (
+        f"https://thumbnails.roblox.com/v1/users/avatar-headshot"
+        f"?userIds={user_id}&size=420x420&format=Png"
+    )
+    async with session.get(url) as resp:
+        if resp.status == 200:
+            data = await resp.json()
+            if data.get("data"):
+                return data["data"][0].get("imageUrl")
+    return None
+
+
+async def resolve_user(identifier: str) -> tuple[dict | None, str | None]:
+    async with aiohttp.ClientSession() as session:
+        if identifier.isdigit():
+            user = await fetch_roblox_user_by_id(session, int(identifier))
+            if user:
+                avatar = await fetch_roblox_avatar(session, user["id"])
+                return user, avatar
+        else:
+            basic = await fetch_roblox_user_by_username(session, identifier)
+            if basic:
+                user = await fetch_roblox_user_by_id(session, basic["id"])
+                if user:
+                    avatar = await fetch_roblox_avatar(session, user["id"])
+                    return user, avatar
+    return None, None
+
+
+def format_roblox_date(raw: str) -> str:
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return dt.strftime("%B %d, %Y")
+    except Exception:
+        return raw
+
+
+def not_found_embed(identifier: str) -> discord.Embed:
+    return discord.Embed(
+        description=f"❌ No Roblox user found for `{identifier}`.",
+        color=discord.Color.red(),
+    )
+
+
+class RobloxModeration(commands.Cog):
+    """Roblox in-game moderation commands."""
+
+    def __init__(self, bot):
         self.bot = bot
-        self.log_channel: discord.TextChannel | None = None
 
-    async def cog_load(self):
-        """Finds or creates the mod-log channel on startup."""
-        await self.bot.wait_until_ready()
-        guild = self.bot.guild
-        if not guild:
+    async def _log(self, embed: discord.Embed) -> None:
+        if not LOG_CHANNEL_ID:
             return
-        existing = discord.utils.get(guild.text_channels, name=LOG_CHANNEL_NAME)
-        if existing:
-            self.log_channel = existing
-        else:
-            try:
-                self.log_channel = await guild.create_text_channel(
-                    name=LOG_CHANNEL_NAME,
-                    topic="Roblox moderation logs — bans, unbans, and kicks.",
-                )
-                print(f"[RobloxMod] Created log channel: #{LOG_CHANNEL_NAME}")
-            except discord.Forbidden:
-                print(f"[RobloxMod] Missing permissions to create #{LOG_CHANNEL_NAME}.")
+        channel = self.bot.get_channel(LOG_CHANNEL_ID)
+        if channel:
+            await channel.send(embed=embed)
 
-    async def send_log(self, embed: discord.Embed):
-        if self.log_channel:
-            await self.log_channel.send(embed=embed)
-
-    async def get_roblox_id(self, username: str) -> tuple:
-        """Returns (userId, exactName) or (None, None)."""
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://users.roblox.com/v1/usernames/users",
-                json={"usernames": [username], "excludeBannedUsers": False},
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    users = data.get("data", [])
-                    if users:
-                        return int(users[0]["id"]), users[0]["name"]
-        return None, None
-
-    def _oc_headers(self):
-        return {"x-api-key": ROBLOX_API_KEY, "Content-Type": "application/json"}
-
-    # ── .rban ─────────────────────────────────────────────────────────────────
-
-    @commands.command(name="rban")
-    @checks.has_permissions(PermissionLevel.MODERATOR)
-    async def rban(self, ctx: commands.Context, *, args: str = ""):
-        """Ban a Roblox user via Open Cloud API. Usage: .rban <username> <reason>"""
-
-        await ctx.message.delete()
-
-        parts = args.strip().split(" ", 1)
-        roblox_username = parts[0] if len(parts) >= 1 else ""
-        reason = parts[1] if len(parts) >= 2 else ""
-
-        if not roblox_username:
-            embed = discord.Embed(title="⚠️ Missing Information", color=discord.Color.orange())
-            embed.add_field(name="Usage",   value="`.rban <roblox_username> <reason>`",           inline=False)
-            embed.add_field(name="Example", value="`.rban xxleoncakewoofxx Exploiting in game`",  inline=False)
-            await ctx.send(embed=embed)
-            return
-
-        if not reason:
-            embed = discord.Embed(title="⚠️ Missing Reason", color=discord.Color.orange())
-            embed.description = f"Please provide a reason for banning **{roblox_username}**."
-            embed.add_field(name="Usage", value="`.rban <roblox_username> <reason>`", inline=False)
-            await ctx.send(embed=embed)
-            return
-
-        status_msg = await ctx.send(f"🔍 Looking up **{roblox_username}**...")
-        roblox_id, exact_name = await self.get_roblox_id(roblox_username)
-
-        if roblox_id is None:
-            embed = discord.Embed(title="❌ User Not Found", color=discord.Color.red())
-            embed.description = f"No Roblox account found for **{roblox_username}**."
-            await status_msg.edit(content=None, embed=embed)
-            return
-
-        await status_msg.edit(content=f"⏳ Banning **{exact_name}**...")
-
-        url = f"{_OC_BASE}/universes/{ROBLOX_UNIVERSE_ID}/user-restrictions/{roblox_id}"
-        payload = {
-            "gameJoinRestriction": {
-                "active": True,
-                "duration": "0s",
-                "privateReason": reason,
-                "displayReason": "You have been banned from this experience.",
-                "excludeAltAccounts": False,
-            }
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.patch(url, headers=self._oc_headers(), json=payload) as resp:
-                success = resp.status == 200
-                error_body = await resp.text() if not success else ""
-
-        if success:
-            embed = discord.Embed(title="🔨 Player Banned", color=discord.Color.red())
-            embed.add_field(name="Roblox Username", value=exact_name, inline=True)
-            embed.add_field(name="User ID",         value=str(roblox_id), inline=True)
-            embed.add_field(name="Reason",          value=reason, inline=False)
-            embed.set_footer(text=f"Banned by {ctx.author.display_name}")
-            await status_msg.edit(content=None, embed=embed)
-            await self.send_log(embed)
-        else:
-            embed = discord.Embed(title="❌ Ban Failed", color=discord.Color.red())
-            embed.description = (
-                f"Could not ban **{exact_name}**.\n"
-                f"Check your API key has `user-restrictions:write` permission and your Universe ID is correct.\n"
-                f"```{error_body[:300]}```"
-            )
-            await status_msg.edit(content=None, embed=embed)
-
-    @rban.error
-    async def rban_error(self, ctx, error):
-        if isinstance(error, commands.CheckFailure):
-            await ctx.send("❌ You don't have permission to use this command.")
-
-    # ── .runban ───────────────────────────────────────────────────────────────
-
-    @commands.command(name="runban")
-    @checks.has_permissions(PermissionLevel.MODERATOR)
-    async def runban(self, ctx: commands.Context, *, roblox_username: str = ""):
-        """Unban a Roblox user via Open Cloud API. Usage: .runban <username>"""
-
-        await ctx.message.delete()
-
-        if not roblox_username:
-            embed = discord.Embed(title="⚠️ Missing Username", color=discord.Color.orange())
-            embed.add_field(name="Usage",   value="`.runban <roblox_username>`",  inline=False)
-            embed.add_field(name="Example", value="`.runban xxleoncakewoofxx`",   inline=False)
-            await ctx.send(embed=embed)
-            return
-
-        status_msg = await ctx.send(f"🔍 Looking up **{roblox_username}**...")
-        roblox_id, exact_name = await self.get_roblox_id(roblox_username)
-
-        if roblox_id is None:
-            embed = discord.Embed(title="❌ User Not Found", color=discord.Color.red())
-            embed.description = f"No Roblox account found for **{roblox_username}**."
-            await status_msg.edit(content=None, embed=embed)
-            return
-
-        await status_msg.edit(content=f"⏳ Unbanning **{exact_name}**...")
-
-        url = f"{_OC_BASE}/universes/{ROBLOX_UNIVERSE_ID}/user-restrictions/{roblox_id}"
-        payload = {"gameJoinRestriction": {"active": False}}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.patch(url, headers=self._oc_headers(), json=payload) as resp:
-                success = resp.status == 200
-                error_body = await resp.text() if not success else ""
-
-        if success:
-            embed = discord.Embed(title="✅ Player Unbanned", color=discord.Color.green())
-            embed.add_field(name="Roblox Username", value=exact_name, inline=True)
-            embed.add_field(name="User ID",         value=str(roblox_id), inline=True)
-            embed.set_footer(text=f"Unbanned by {ctx.author.display_name}")
-            await status_msg.edit(content=None, embed=embed)
-            await self.send_log(embed)
-        else:
-            embed = discord.Embed(title="❌ Unban Failed", color=discord.Color.red())
-            embed.description = (
-                f"Could not unban **{exact_name}**.\n"
-                f"```{error_body[:300]}```"
-            )
-            await status_msg.edit(content=None, embed=embed)
-
-    @runban.error
-    async def runban_error(self, ctx, error):
-        if isinstance(error, commands.CheckFailure):
-            await ctx.send("❌ You don't have permission to use this command.")
-
-    # ── .rlookup ──────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------ rlookup
 
     @commands.command(name="rlookup")
-    @checks.has_permissions(PermissionLevel.MODERATOR)
-    async def rlookup(self, ctx: commands.Context, *, roblox_username: str = ""):
-        """Look up a Roblox user's profile and in-game data. Usage: .rlookup <username>"""
+    @commands.has_permissions(manage_messages=True)
+    async def rlookup(self, ctx: commands.Context, *, identifier: str):
+        """Look up a Roblox user by username or user ID.
 
-        await ctx.message.delete()
+        Shows their profile, account info, and whether they are banned in-game.
 
-        if not roblox_username:
-            embed = discord.Embed(title="⚠️ Missing Username", color=discord.Color.orange())
-            embed.add_field(name="Usage", value="`.rlookup <roblox_username>`", inline=False)
+        Usage: ?rlookup <username or user ID>
+        """
+        async with ctx.typing():
+            user, avatar = await resolve_user(identifier)
+            if not user:
+                return await ctx.send(embed=not_found_embed(identifier))
+
+            bans = load_bans()
+            uid = str(user["id"])
+            is_banned = uid in bans
+            ban_info = bans.get(uid, {})
+
+            description = (user.get("description") or "").strip() or "No description."
+            if len(description) > 350:
+                description = description[:347] + "..."
+
+            created = format_roblox_date(user.get("created", "Unknown"))
+            display = user.get("displayName") or user["name"]
+
+            embed = discord.Embed(
+                title=f"Roblox Profile — {user['name']}",
+                url=f"https://www.roblox.com/users/{user['id']}/profile",
+                color=discord.Color.red() if is_banned else discord.Color.brand_green(),
+            )
+            if avatar:
+                embed.set_thumbnail(url=avatar)
+
+            embed.add_field(name="Username", value=f"`{user['name']}`", inline=True)
+            embed.add_field(name="Display Name", value=f"`{display}`", inline=True)
+            embed.add_field(name="User ID", value=f"`{user['id']}`", inline=True)
+            embed.add_field(name="Account Created", value=created, inline=True)
+            embed.add_field(
+                name="Game Ban Status",
+                value="🔴 **BANNED**" if is_banned else "🟢 **Not Banned**",
+                inline=True,
+            )
+
+            if is_banned:
+                embed.add_field(
+                    name="Ban Reason",
+                    value=ban_info.get("reason", "No reason provided"),
+                    inline=False,
+                )
+                embed.add_field(
+                    name="Banned By",
+                    value=ban_info.get("banned_by", "Unknown"),
+                    inline=True,
+                )
+                embed.add_field(
+                    name="Banned On",
+                    value=ban_info.get("banned_at", "Unknown"),
+                    inline=True,
+                )
+
+            if description != "No description.":
+                embed.add_field(name="Bio", value=description, inline=False)
+
+            embed.set_footer(text=f"Requested by {ctx.author}")
             await ctx.send(embed=embed)
-            return
 
-        from datetime import datetime
+    # -------------------------------------------------------------------- rban
 
-        status_msg = await ctx.send(f"🔍 Looking up **{roblox_username}**...")
-        roblox_id, exact_name = await self.get_roblox_id(roblox_username)
+    @commands.command(name="rban")
+    @commands.has_permissions(manage_messages=True)
+    async def rban(self, ctx: commands.Context, identifier: str, *, reason: str = "No reason provided"):
+        """Ban a Roblox user from the game.
 
-        if roblox_id is None:
-            embed = discord.Embed(title="❌ User Not Found", color=discord.Color.red())
-            embed.description = f"No Roblox account found for **{roblox_username}**."
-            await status_msg.edit(content=None, embed=embed)
-            return
+        Usage: ?rban <username or user ID> [reason]
+        """
+        async with ctx.typing():
+            user, avatar = await resolve_user(identifier)
+            if not user:
+                return await ctx.send(embed=not_found_embed(identifier))
 
-        # Build DataStore key
-        ds_key = f"{DIAMONDS_KEY_PREFIX}{roblox_id}"
+            bans = load_bans()
+            uid = str(user["id"])
 
-        async with aiohttp.ClientSession() as session:
-            # Public profile
-            user_resp = await session.get(f"https://users.roblox.com/v1/users/{roblox_id}")
-            user_data = await user_resp.json() if user_resp.status == 200 else {}
+            if uid in bans:
+                embed = discord.Embed(
+                    description=(
+                        f"⚠️ **{user['name']}** (`{user['id']}`) is already banned.\n"
+                        f"Reason on file: *{bans[uid].get('reason', 'None')}*"
+                    ),
+                    color=discord.Color.orange(),
+                )
+                return await ctx.send(embed=embed)
 
-            # Avatar headshot
-            avatar_resp = await session.get(
-                f"https://thumbnails.roblox.com/v1/users/avatar-headshot"
-                f"?userIds={roblox_id}&size=150x150&format=Png&isCircular=false"
+            timestamp = datetime.now(timezone.utc).strftime("%B %d, %Y at %H:%M UTC")
+            bans[uid] = {
+                "username": user["name"],
+                "reason": reason,
+                "banned_by": str(ctx.author),
+                "banned_at": timestamp,
+            }
+            save_bans(bans)
+
+            embed = discord.Embed(title="🔨 Roblox Ban Issued", color=discord.Color.red())
+            if avatar:
+                embed.set_thumbnail(url=avatar)
+            embed.add_field(
+                name="User",
+                value=f"**{user['name']}** (`{user['id']}`)\n[View Profile](https://www.roblox.com/users/{user['id']}/profile)",
+                inline=False,
             )
-            avatar_data = await avatar_resp.json() if avatar_resp.status == 200 else {}
+            embed.add_field(name="Reason", value=reason, inline=False)
+            embed.add_field(name="Banned By", value=str(ctx.author), inline=True)
+            embed.add_field(name="Time", value=timestamp, inline=True)
+            embed.set_footer(text=f"Use ?runban {user['id']} to reverse this")
+            await ctx.send(embed=embed)
+            await self._log(embed)
 
-            # Friend count
-            friends_resp = await session.get(
-                f"https://friends.roblox.com/v1/users/{roblox_id}/friends/count"
+    # ------------------------------------------------------------------ runban
+
+    @commands.command(name="runban")
+    @commands.has_permissions(manage_messages=True)
+    async def runban(self, ctx: commands.Context, identifier: str):
+        """Unban a Roblox user from the game.
+
+        Usage: ?runban <username or user ID>
+        """
+        async with ctx.typing():
+            user, avatar = await resolve_user(identifier)
+            if not user:
+                return await ctx.send(embed=not_found_embed(identifier))
+
+            bans = load_bans()
+            uid = str(user["id"])
+
+            if uid not in bans:
+                embed = discord.Embed(
+                    description=f"⚠️ **{user['name']}** (`{user['id']}`) is not currently banned.",
+                    color=discord.Color.orange(),
+                )
+                return await ctx.send(embed=embed)
+
+            del bans[uid]
+            save_bans(bans)
+
+            embed = discord.Embed(title="✅ Ban Removed", color=discord.Color.brand_green())
+            if avatar:
+                embed.set_thumbnail(url=avatar)
+            embed.add_field(
+                name="User",
+                value=f"**{user['name']}** (`{user['id']}`)\n[View Profile](https://www.roblox.com/users/{user['id']}/profile)",
+                inline=False,
             )
-            friends_data = await friends_resp.json() if friends_resp.status == 200 else {}
-
-            # Badge count
-            badges_resp = await session.get(
-                f"https://badges.roblox.com/v1/users/{roblox_id}/badges?limit=1"
+            embed.add_field(name="Unbanned By", value=str(ctx.author), inline=True)
+            embed.add_field(
+                name="Time",
+                value=datetime.now(timezone.utc).strftime("%B %d, %Y at %H:%M UTC"),
+                inline=True,
             )
-            badges_data = await badges_resp.json() if badges_resp.status == 200 else {}
+            await ctx.send(embed=embed)
+            await self._log(embed)
 
-            # DataStore — diamonds via Open Cloud
-            diamonds = None
-            ds_url = (
-                f"{_DS_BASE}/universes/{ROBLOX_UNIVERSE_ID}"
-                f"/standard-datastores/datastore/entries/entry"
-                f"?datastoreName={DATASTORE_NAME}&entryKey={ds_key}"
+    # ------------------------------------------------------------------- rkick
+
+    @commands.command(name="rkick")
+    @commands.has_permissions(manage_messages=True)
+    async def rkick(self, ctx: commands.Context, identifier: str, *, reason: str = "No reason provided"):
+        """Log a kick action for a Roblox user.
+
+        Usage: ?rkick <username or user ID> [reason]
+        """
+        async with ctx.typing():
+            user, avatar = await resolve_user(identifier)
+            if not user:
+                return await ctx.send(embed=not_found_embed(identifier))
+
+            timestamp = datetime.now(timezone.utc).strftime("%B %d, %Y at %H:%M UTC")
+
+            embed = discord.Embed(title="👢 Roblox Kick Logged", color=discord.Color.orange())
+            if avatar:
+                embed.set_thumbnail(url=avatar)
+            embed.add_field(
+                name="User",
+                value=f"**{user['name']}** (`{user['id']}`)\n[View Profile](https://www.roblox.com/users/{user['id']}/profile)",
+                inline=False,
             )
-            ds_resp = await session.get(ds_url, headers={"x-api-key": ROBLOX_API_KEY})
-            if ds_resp.status == 200:
-                raw = await ds_resp.text()
-                try:
-                    parsed = json.loads(raw)
-                    if DIAMONDS_FIELD and isinstance(parsed, dict):
-                        diamonds = parsed.get(DIAMONDS_FIELD)
-                    else:
-                        diamonds = parsed
-                except Exception:
-                    diamonds = None
-
-        display_name = user_data.get("displayName", exact_name)
-        description  = user_data.get("description", "") or ""
-        created_raw  = user_data.get("created", "")
-        is_banned    = user_data.get("isBanned", False)
-        friend_count = friends_data.get("count", "N/A")
-        badge_count  = badges_data.get("total", "N/A")
-
-        join_date = "Unknown"
-        if created_raw:
-            try:
-                dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
-                join_date = dt.strftime("%B %d, %Y")
-            except Exception:
-                join_date = created_raw[:10]
-
-        avatar_url = None
-        try:
-            avatar_url = avatar_data["data"][0]["imageUrl"]
-        except (KeyError, IndexError):
-            pass
-
-        embed = discord.Embed(
-            title=f"{'🔨 ' if is_banned else ''}@{exact_name}",
-            url=f"https://www.roblox.com/users/{roblox_id}/profile",
-            color=discord.Color.red() if is_banned else discord.Color.blurple(),
-        )
-        embed.add_field(name="Display Name",  value=display_name,                 inline=True)
-        embed.add_field(name="User ID",       value=str(roblox_id),               inline=True)
-        embed.add_field(name="Joined Roblox", value=join_date,                    inline=True)
-        embed.add_field(name="Friends",       value=str(friend_count),            inline=True)
-        embed.add_field(name="Badges",        value=str(badge_count),             inline=True)
-        embed.add_field(name="Roblox Banned", value="Yes" if is_banned else "No", inline=True)
-
-        if diamonds is not None:
-            embed.add_field(name="💎 Diamonds", value=f"{int(diamonds):,}", inline=True)
-        else:
-            embed.add_field(name="💎 Diamonds", value="Not found — check DATASTORE_NAME and DIAMONDS_FIELD in the plugin config.", inline=False)
-
-        if description:
-            embed.add_field(name="About", value=description[:256], inline=False)
-
-        if avatar_url:
-            embed.set_thumbnail(url=avatar_url)
-
-        embed.set_footer(text=f"Looked up by {ctx.author.display_name}")
-        await status_msg.edit(content=None, embed=embed)
-
-    @rlookup.error
-    async def rlookup_error(self, ctx, error):
-        if isinstance(error, commands.CheckFailure):
-            await ctx.send("❌ You don't have permission to use this command.")
+            embed.add_field(name="Reason", value=reason, inline=False)
+            embed.add_field(name="Kicked By", value=str(ctx.author), inline=True)
+            embed.add_field(name="Time", value=timestamp, inline=True)
+            embed.set_footer(text="Apply this kick in-game — use ?rban to make it permanent")
+            await ctx.send(embed=embed)
+            await self._log(embed)
 
 
-async def setup(bot: commands.Bot):
-    await bot.add_cog(RobloxMod(bot))
+async def setup(bot):
+    await bot.add_cog(RobloxModeration(bot))
