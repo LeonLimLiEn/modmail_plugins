@@ -4,6 +4,8 @@ import aiohttp
 import json
 import os
 from datetime import datetime, timezone
+from core import checks
+from core.models import PermissionLevel
 
 # ============================================================
 # CREDENTIALS — fill these in before running
@@ -104,6 +106,16 @@ class RobloxModeration(commands.Cog):
         channel = self.bot.get_channel(LOG_CHANNEL_ID)
         if channel:
             await channel.send(embed=embed)
+
+    async def cog_command_error(self, ctx: commands.Context, error: Exception) -> None:
+        if isinstance(error, commands.MissingRequiredArgument):
+            embed = discord.Embed(
+                description=f"❌ You need to provide a username or user ID.\nUsage: `?{ctx.command.name} <username or user ID>`",
+                color=discord.Color.red(),
+            )
+            await ctx.send(embed=embed)
+        else:
+            raise error
 
     # ------------------------------------------------------------------ rlookup
 
