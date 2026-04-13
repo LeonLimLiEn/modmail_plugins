@@ -7,13 +7,9 @@ from datetime import datetime, timezone
 from core import checks
 from core.models import PermissionLevel
 
-# ============================================================
-# CREDENTIALS — fill these in before running
-# ============================================================
 ROBLOX_OPEN_CLOUD_API_KEY = "YOUR_OPEN_CLOUD_API_KEY_HERE"
 ROBLOX_UNIVERSE_ID        = "YOUR_UNIVERSE_ID_HERE"
-LOG_CHANNEL_ID            = 000000000000000000   # paste your log channel ID here
-# ============================================================
+LOG_CHANNEL_ID            = 000000000000000000
 
 BANS_FILE = os.path.join(os.path.dirname(__file__), "roblox_bans.json")
 
