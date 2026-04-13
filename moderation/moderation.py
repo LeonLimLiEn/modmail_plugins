@@ -108,7 +108,7 @@ class RobloxModeration(commands.Cog):
     # ------------------------------------------------------------------ rlookup
 
     @commands.command(name="rlookup")
-    @commands.has_permissions(manage_messages=True)
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def rlookup(self, ctx: commands.Context, *, identifier: str):
         """Look up a Roblox user by username or user ID.
 
@@ -177,7 +177,7 @@ class RobloxModeration(commands.Cog):
     # -------------------------------------------------------------------- rban
 
     @commands.command(name="rban")
-    @commands.has_permissions(manage_messages=True)
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def rban(self, ctx: commands.Context, identifier: str, *, reason: str = "No reason provided"):
         """Ban a Roblox user from the game.
 
@@ -228,7 +228,7 @@ class RobloxModeration(commands.Cog):
     # ------------------------------------------------------------------ runban
 
     @commands.command(name="runban")
-    @commands.has_permissions(manage_messages=True)
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def runban(self, ctx: commands.Context, identifier: str):
         """Unban a Roblox user from the game.
 
@@ -272,7 +272,7 @@ class RobloxModeration(commands.Cog):
     # ------------------------------------------------------------------- rkick
 
     @commands.command(name="rkick")
-    @commands.has_permissions(manage_messages=True)
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def rkick(self, ctx: commands.Context, identifier: str, *, reason: str = "No reason provided"):
         """Log a kick action for a Roblox user.
 
