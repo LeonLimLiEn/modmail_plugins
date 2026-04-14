@@ -1,114 +1,169 @@
+from __future__ import annotations
+
 import discord
-import re
-import logging
 from discord.ext import commands
-from discord import ui
-from core import checks
-from core.models import PermissionLevel
+import asyncio
+from datetime import datetime
+from typing import List, Optional
 
-# Setup Logging
-logger = logging.getLogger("Modmail")
+# =========================
+# ADVANCED ANNOUNCEMENT SYSTEM
+# =========================
 
-class EmbedPro(commands.Cog):
-    """
-    Advanced Embed Builder for Modmail.
-    Features: Multi-Field support, Images, Thumbnails, Author, Footer, and Role Pings.
-    """
+class AnnouncementSession:
+    def __init__(self, ctx: commands.Context):
+        self.ctx = ctx
+        self.title: Optional[str] = None
+        self.description: Optional[str] = None
+        self.color: int = 0x2F3136
+        self.image: Optional[str] = None
+        self.thumbnail: Optional[str] = None
+        self.footer: Optional[str] = None
+        self.buttons: List[dict] = []
+        self.channels: List[discord.TextChannel] = []
+        self.schedule_time: Optional[datetime] = None
+        self.anonymous: bool = True
+
+    def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=self.title,
+            description=self.description,
+            color=self.color
+        )
+
+        if self.image:
+            embed.set_image(url=self.image)
+
+        if self.thumbnail:
+            embed.set_thumbnail(url=self.thumbnail)
+
+        if self.footer:
+            embed.set_footer(text=self.footer)
+
+        return embed
+
+
+class ButtonView(discord.ui.View):
+    def __init__(self, buttons: List[dict]):
+        super().__init__(timeout=None)
+
+        for btn in buttons:
+            self.add_item(discord.ui.Button(label=btn["label"], url=btn["url"]))
+
+
+class ConfirmView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.value = None
+
+    @discord.ui.button(label="Send", style=discord.ButtonStyle.green)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.value = True
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.value = False
+        self.stop()
+
+
+class Announcement(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.group(name="embed", invoke_without_command=True)
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def embed(self, ctx):
-        """Main embed command group."""
-        await ctx.send("Usage: `.embed send <channel_id> <color> <title> <description> [image_url]`")
+    @commands.command()
+    @commands.has_permissions(administrator=True)
+    async def announce(self, ctx: commands.Context):
+        """Start advanced announcement builder"""
 
-    @embed.command(name="send")
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def send(self, ctx, channel_id: int, color: str, title: str, *, description: str):
-        """Sends a structured embed to a channel."""
-        channel = self.bot.get_channel(channel_id)
-        if not channel:
-            return await ctx.send("❌ Channel not found.")
+        session = AnnouncementSession(ctx)
 
-        # Parsing color
-        try:
-            color_val = int(color.lstrip('#'), 16)
-        except ValueError:
-            return await ctx.send("❌ Invalid Hex. Use format #FFFFFF")
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel
 
-        embed = discord.Embed(
-            title=title,
-            description=description.replace("\\n", "\n"),
-            color=color_val
-        )
-        embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
-        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+        await ctx.send("**Enter title:**")
+        msg = await self.bot.wait_for("message", check=check)
+        session.title = msg.content
 
-        view = EmbedActionView(channel, embed)
-        await ctx.send("📋 **Embed Preview:** ", embed=embed, view=view)
+        await ctx.send("**Enter description:**")
+        msg = await self.bot.wait_for("message", check=check)
+        session.description = msg.content
 
-class EmbedActionView(ui.View):
-    def __init__(self, channel, embed):
-        super().__init__(timeout=120)
-        self.channel = channel
-        self.embed = embed
+        await ctx.send("**Enter hex color (or 'skip'):**")
+        msg = await self.bot.wait_for("message", check=check)
+        if msg.content.lower() != "skip":
+            session.color = int(msg.content.replace("#", ""), 16)
 
-    @ui.button(label="Confirm & Send", style=discord.ButtonStyle.green)
-    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
-        try:
-            await self.channel.send(embed=self.embed)
-            await interaction.response.edit_message(content="✅ Embed sent successfully!", embed=None, view=None)
-        except Exception as e:
-            await interaction.response.edit_message(content=f"❌ Error: {e}", embed=None, view=None)
+        await ctx.send("**Enter image URL (or 'skip'):**")
+        msg = await self.bot.wait_for("message", check=check)
+        if msg.content.lower() != "skip":
+            session.image = msg.content
 
-    @ui.button(label="Cancel", style=discord.ButtonStyle.red)
-    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.edit_message(content="❌ Operation aborted.", embed=None, view=None)
+        await ctx.send("**Enter thumbnail URL (or 'skip'):**")
+        msg = await self.bot.wait_for("message", check=check)
+        if msg.content.lower() != "skip":
+            session.thumbnail = msg.content
 
-class AdvancedEmbedBuilder(ui.Modal, title="Detailed Embed Builder"):
-    """An advanced modal-based builder for deep customization."""
-    title_field = ui.TextInput(label="Embed Title", max_length=256)
-    desc_field = ui.TextInput(label="Description", style=discord.TextStyle.paragraph, max_length=2000)
-    color_field = ui.TextInput(label="Hex Color (e.g. #FF5733)", min_length=6, max_length=7)
-    img_field = ui.TextInput(label="Image URL", required=False)
+        await ctx.send("**Enter footer (or 'skip'):**")
+        msg = await self.bot.wait_for("message", check=check)
+        if msg.content.lower() != "skip":
+            session.footer = msg.content
 
-    def __init__(self, channel):
-        super().__init__()
-        self.channel = channel
+        await ctx.send("**Mention channels to send (separate by space):**")
+        msg = await self.bot.wait_for("message", check=check)
+        session.channels = msg.channel_mentions
 
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            color = int(self.color_field.value.lstrip('#'), 16)
-            embed = discord.Embed(title=self.title_field.value, description=self.desc_field.value, color=color)
-            if self.img_field.value:
-                embed.set_image(url=self.img_field.value)
-            
-            await self.channel.send(embed=embed)
-            await interaction.response.send_message("✅ Success!", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+        await ctx.send("**Add button? (yes/no)**")
+        msg = await self.bot.wait_for("message", check=check)
 
-# Extended Logic for complex plugins:
-# We add a command to open the Modal builder directly
-@commands.command(name="buildembed")
-@checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-async def buildembed(self, ctx, channel_id: int):
-    """Opens a visual modal to build an embed."""
-    channel = self.bot.get_channel(channel_id)
-    if channel:
-        await ctx.send_modal(AdvancedEmbedBuilder(channel))
-    else:
-        await ctx.send("❌ Channel not found.")
+        if msg.content.lower() == "yes":
+            await ctx.send("Button label:")
+            label = (await self.bot.wait_for("message", check=check)).content
 
-# Note: In a real 200+ line plugin, you would include:
-# 1. Database models to save templates (using core.models.Database)
-# 2. A complete 'Edit' system (editing existing embeds by message ID)
-# 3. Role Ping management via buttons
-# 4. JSON import/export support
+            await ctx.send("Button URL:")
+            url = (await self.bot.wait_for("message", check=check)).content
+
+            session.buttons.append({"label": label, "url": url})
+
+        await ctx.send("**Schedule? (YYYY-MM-DD HH:MM or 'no'):**")
+        msg = await self.bot.wait_for("message", check=check)
+
+        if msg.content.lower() != "no":
+            session.schedule_time = datetime.strptime(msg.content, "%Y-%m-%d %H:%M")
+
+        embed = session.build_embed()
+        view = ButtonView(session.buttons) if session.buttons else None
+
+        preview = await ctx.send("**Preview:**", embed=embed, view=view)
+
+        confirm_view = ConfirmView()
+        await ctx.send("Send announcement?", view=confirm_view)
+
+        await confirm_view.wait()
+
+        if not confirm_view.value:
+            return await ctx.send("Cancelled.")
+
+        async def send():
+            for channel in session.channels:
+                try:
+                    msg = await channel.send(embed=embed, view=view)
+
+                    if channel.type == discord.ChannelType.news:
+                        await msg.publish()
+
+                except Exception:
+                    pass
+
+        if session.schedule_time:
+            delay = (session.schedule_time - datetime.utcnow()).total_seconds()
+            if delay > 0:
+                await ctx.send(f"Scheduled in {int(delay)} seconds.")
+                await asyncio.sleep(delay)
+
+        await send()
+        await ctx.send("Announcement sent.")
+
 
 async def setup(bot):
-    cog = EmbedPro(bot)
-    # Registering the extra command manually
-    bot.add_command(buildembed) 
-    await bot.add_cog(cog)
+    await bot.add_cog(Announcement(bot))
