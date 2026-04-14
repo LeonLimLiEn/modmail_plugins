@@ -5,7 +5,7 @@ from discord import ui
 # ============================================================
 # CREDENTIALS — fill these in before running
 # ============================================================
-APPEAL_CHANNEL_ID = 000000000000000000   # staff appeal review channel ID
+APPEAL_CHANNEL_ID = 1493584131458728076   # staff appeal review channel ID
 # ============================================================
 
 # In-memory vote storage keyed by the appeal message ID
