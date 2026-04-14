@@ -1,12 +1,18 @@
 import discord
 from discord.ext import commands
 from discord import ui
+from core import checks
+from core.models import PermissionLevel
+import logging
 
 # ============================================================
 # CREDENTIALS — fill these in before running
 # ============================================================
 APPEAL_CHANNEL_ID = 1493584131458728076   # staff appeal review channel ID
 # ============================================================
+
+# Set up logging
+logger = logging.getLogger("Modmail")
 
 # In-memory vote storage keyed by the appeal message ID
 # { message_id: { "accept": set(), "decline": set(), "applicant_id": int, "roblox_username": str } }
@@ -77,7 +83,7 @@ class AppealModal(ui.Modal, title="Ban Appeal Application"):
             embed.add_field(name="Additional Info", value=self.additional.value, inline=False)
         embed.add_field(
             name="Current Votes",
-            value="✅ Accept: **0** | ❌ Decline: **0**",
+            value="✅ Accept: **0** | ❌ Decline: **0** ",
             inline=False,
         )
         embed.set_thumbnail(url=self.applicant.display_avatar.url)
@@ -124,7 +130,7 @@ class AppealVoteView(ui.View):
                 embed.set_field_at(
                     i,
                     name="Current Votes",
-                    value=f"✅ Accept: **{accept_count}** | ❌ Decline: **{decline_count}**",
+                    value=f"✅ Accept: **{accept_count}** | ❌ Decline: **{decline_count}** ",
                     inline=False,
                 )
                 break
@@ -186,14 +192,14 @@ class AppealVoteView(ui.View):
             result_label = "✅ ACCEPTED"
             color = discord.Color.green()
             dm_msg = (
-                f"✅ Your ban appeal for Roblox user **{data['roblox_username']}** has been **accepted**.\n"
+                f"✅ Your ban appeal for Roblox user **{data['roblox_username']}** has been **accepted** .\n"
                 "Please contact staff for next steps."
             )
         elif decline_count > accept_count:
             result_label = "❌ DECLINED"
             color = discord.Color.red()
             dm_msg = (
-                f"❌ Your ban appeal for Roblox user **{data['roblox_username']}** has been **declined**."
+                f"❌ Your ban appeal for Roblox user **{data['roblox_username']}** has been **declined** ."
             )
         else:
             result_label = "⚖️ TIE — No decision"
@@ -212,8 +218,8 @@ class AppealVoteView(ui.View):
                     i,
                     name="Final Result",
                     value=(
-                        f"✅ Accept: **{accept_count}** | ❌ Decline: **{decline_count}**\n"
-                        f"**{result_label}**"
+                        f"✅ Accept: **{accept_count}** | ❌ Decline: **{decline_count}** \n"
+                        f" **{result_label}** "
                     ),
                     inline=False,
                 )
@@ -225,7 +231,7 @@ class AppealVoteView(ui.View):
 
         await interaction.message.edit(embed=embed, view=self)
         await interaction.response.send_message(
-            f"Vote closed. Result: **{result_label}**", ephemeral=True
+            f"Vote closed. Result: **{result_label}** ", ephemeral=True
         )
 
         applicant = interaction.client.get_user(data["applicant_id"])
@@ -233,7 +239,7 @@ class AppealVoteView(ui.View):
             try:
                 await applicant.send(dm_msg)
             except discord.Forbidden:
-                pass
+                logger.warning(f"Could not DM user {applicant.id} with appeal result")
 
 
 # ------------------------------------------------------------------ Start view (sent in DM)
@@ -268,31 +274,51 @@ class Appeal(commands.Cog):
         self.bot = bot
 
     @commands.command(name="appeal")
-    async def appeal(self, ctx: commands.Context) -> None:
-        """Send a ban appeal form to the thread recipient. Must be used inside a ModMail thread."""
-        thread = self.bot.threads.find_by_channel_id(ctx.channel.id)
-        if not thread:
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def appeal(self, ctx: commands.Context, *, user: discord.Member = None) -> None:
+        """
+        Send a ban appeal form to a user.
+        
+        Usage:
+        - Inside a thread: `?appeal` (sends to thread recipient)
+        - Anywhere: `?appeal @user` or `?appeal user_id` (sends to specified user)
+        """
+        
+        # Check if APPEAL_CHANNEL_ID is set
+        if not APPEAL_CHANNEL_ID or APPEAL_CHANNEL_ID == 0:
             embed = discord.Embed(
-                description="❌ This command can only be used inside a ModMail thread.",
+                description="❌ `APPEAL_CHANNEL_ID` has not been set in the plugin configuration.",
                 color=discord.Color.red(),
             )
             return await ctx.send(embed=embed)
 
-        if not APPEAL_CHANNEL_ID:
+        # Determine the target user
+        applicant = user
+        
+        # If no user specified, check if we're in a thread
+        if not applicant:
+            thread = await self.bot.threads.find(channel=ctx.channel)
+            if thread:
+                applicant = thread.recipient
+                logger.info(f"Found thread recipient: {applicant}")
+            
+        # Still no applicant found
+        if not applicant:
             embed = discord.Embed(
-                description="❌ `APPEAL_CHANNEL_ID` has not been set in `appeal.py`.",
+                description=(
+                    "❌ Please specify a user or use this command inside a ModMail thread.\n\n"
+                    " **Usage:** \n"
+                    "`?appeal @user` - Send appeal to mentioned user\n"
+                    "`?appeal user_id` - Send appeal to user by ID\n"
+                    "`?appeal` - (in thread) Send appeal to thread recipient"
+                ),
                 color=discord.Color.red(),
             )
             return await ctx.send(embed=embed)
 
-        applicant = thread.recipient
-        if applicant is None:
-            embed = discord.Embed(
-                description="❌ Could not find the thread recipient.",
-                color=discord.Color.red(),
-            )
-            return await ctx.send(embed=embed)
+        logger.info(f"Attempting to send appeal to: {applicant} ({applicant.id})")
 
+        # Create the embed
         embed = discord.Embed(
             title="Ban Appeal",
             description=(
@@ -304,23 +330,47 @@ class Appeal(commands.Cog):
         )
         embed.set_footer(text="This form expires in 10 minutes.")
 
+        # Try to send DM
         try:
-            await applicant.send(embed=embed, view=AppealStartView(applicant=applicant))
+            dm_message = await applicant.send(embed=embed, view=AppealStartView(applicant=applicant))
+            logger.info(f"Successfully sent appeal DM to {applicant}")
+            
+            # Confirm in channel
+            confirm = discord.Embed(
+                description=f"✅ Appeal form sent to {applicant.mention} (`{applicant.id}`) via DM.",
+                color=discord.Color.green(),
+            )
+            await ctx.send(embed=confirm)
+            
         except discord.Forbidden:
+            logger.warning(f"Could not DM {applicant} - Forbidden")
             embed = discord.Embed(
-                description=f"❌ Could not DM {applicant.mention}. They may have DMs disabled.",
+                description=(
+                    f"❌ Could not DM {applicant.mention}.\n"
+                    " **Possible reasons:** \n"
+                    "• User has DMs disabled\n"
+                    "• User has blocked the bot\n"
+                    "• User is not in a mutual server with the bot"
+                ),
                 color=discord.Color.red(),
             )
-            return await ctx.send(embed=embed)
-
-        confirm = discord.Embed(
-            description=f"✅ Appeal form sent to {applicant.mention} via DM.",
-            color=discord.Color.green(),
-        )
-        await ctx.send(embed=confirm)
-
-    async def cog_command_error(self, ctx: commands.Context, error: Exception) -> None:
-        raise error
+            await ctx.send(embed=embed)
+            
+        except discord.HTTPException as e:
+            logger.error(f"HTTP error sending appeal to {applicant}: {e}")
+            embed = discord.Embed(
+                description=f"❌ An error occurred while sending the DM: {str(e)}",
+                color=discord.Color.red(),
+            )
+            await ctx.send(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Unexpected error sending appeal to {applicant}: {e}", exc_info=True)
+            embed = discord.Embed(
+                description=f"❌ An unexpected error occurred: {str(e)}",
+                color=discord.Color.red(),
+            )
+            await ctx.send(embed=embed)
 
 
 async def setup(bot):
