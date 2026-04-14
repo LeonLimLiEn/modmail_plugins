@@ -8,7 +8,8 @@ import logging
 # ============================================================
 # CREDENTIALS — fill these in before running
 # ============================================================
-APPEAL_CHANNEL_ID = 1493584131458728076   # staff appeal review channel ID
+APPEAL_CHANNEL_ID = 000000000000000000   # staff appeal review channel ID
+STAFF_ROLE_ID = 000000000000000000        # staff role ID who can vote
 # ============================================================
 
 # Set up logging
@@ -83,7 +84,7 @@ class AppealModal(ui.Modal, title="Ban Appeal Application"):
             embed.add_field(name="Additional Info", value=self.additional.value, inline=False)
         embed.add_field(
             name="Current Votes",
-            value="✅ Accept: **0** | ❌ Decline: **0** ",
+            value="✅ Accept: **0** | ❌ Decline: **0**",
             inline=False,
         )
         embed.set_thumbnail(url=self.applicant.display_avatar.url)
@@ -118,6 +119,18 @@ class AppealVoteView(ui.View):
         self.roblox_username = roblox_username
         self.message_id: int | None = None
 
+    def _is_staff(self, member: discord.Member) -> bool:
+        """Check if the member has the staff role or is an administrator."""
+        if not STAFF_ROLE_ID or STAFF_ROLE_ID == 0:
+            # If no staff role set, allow administrators only
+            return member.guild_permissions.administrator
+        
+        # Check for staff role or administrator
+        staff_role = member.guild.get_role(STAFF_ROLE_ID)
+        has_staff_role = staff_role in member.roles if staff_role else False
+        
+        return has_staff_role or member.guild_permissions.administrator
+
     async def _refresh_embed(self, message: discord.Message) -> None:
         data = _active_votes.get(message.id)
         if not data:
@@ -130,7 +143,7 @@ class AppealVoteView(ui.View):
                 embed.set_field_at(
                     i,
                     name="Current Votes",
-                    value=f"✅ Accept: **{accept_count}** | ❌ Decline: **{decline_count}** ",
+                    value=f"✅ Accept: **{accept_count}** | ❌ Decline: **{decline_count}**",
                     inline=False,
                 )
                 break
@@ -138,42 +151,74 @@ class AppealVoteView(ui.View):
 
     @ui.button(label="✅ Accept", style=discord.ButtonStyle.success)
     async def accept(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        # Check if user is staff
+        if not isinstance(interaction.user, discord.Member):
+            return await interaction.response.send_message(
+                "❌ This command must be used in a server.", ephemeral=True
+            )
+        
+        if not self._is_staff(interaction.user):
+            return await interaction.response.send_message(
+                "❌ Only staff members can vote on appeals.", ephemeral=True
+            )
+        
         data = _active_votes.get(interaction.message.id)
         if not data:
             return await interaction.response.send_message(
                 "❌ This vote is no longer active.", ephemeral=True
             )
+        
         uid = interaction.user.id
         if uid in data["accept"]:
             data["accept"].discard(uid)
-            note = "Your accept vote has been removed."
+            note = "✅ Your accept vote has been removed."
         else:
             data["accept"].add(uid)
             data["decline"].discard(uid)
-            note = "You voted to **accept** this appeal."
+            note = "✅ You voted to **accept** this appeal."
+        
         await self._refresh_embed(interaction.message)
         await interaction.response.send_message(note, ephemeral=True)
 
     @ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
     async def decline(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        # Check if user is staff
+        if not isinstance(interaction.user, discord.Member):
+            return await interaction.response.send_message(
+                "❌ This command must be used in a server.", ephemeral=True
+            )
+        
+        if not self._is_staff(interaction.user):
+            return await interaction.response.send_message(
+                "❌ Only staff members can vote on appeals.", ephemeral=True
+            )
+        
         data = _active_votes.get(interaction.message.id)
         if not data:
             return await interaction.response.send_message(
                 "❌ This vote is no longer active.", ephemeral=True
             )
+        
         uid = interaction.user.id
         if uid in data["decline"]:
             data["decline"].discard(uid)
-            note = "Your decline vote has been removed."
+            note = "❌ Your decline vote has been removed."
         else:
             data["decline"].add(uid)
             data["accept"].discard(uid)
-            note = "You voted to **decline** this appeal."
+            note = "❌ You voted to **decline** this appeal."
+        
         await self._refresh_embed(interaction.message)
         await interaction.response.send_message(note, ephemeral=True)
 
     @ui.button(label="🔒 End Vote", style=discord.ButtonStyle.secondary)
     async def end_vote(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        # Check if user is administrator
+        if not isinstance(interaction.user, discord.Member):
+            return await interaction.response.send_message(
+                "❌ This command must be used in a server.", ephemeral=True
+            )
+        
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message(
                 "❌ Only administrators can end the vote.", ephemeral=True
@@ -192,14 +237,14 @@ class AppealVoteView(ui.View):
             result_label = "✅ ACCEPTED"
             color = discord.Color.green()
             dm_msg = (
-                f"✅ Your ban appeal for Roblox user **{data['roblox_username']}** has been **accepted** .\n"
+                f"✅ Your ban appeal for Roblox user **{data['roblox_username']}** has been **accepted**.\n"
                 "Please contact staff for next steps."
             )
         elif decline_count > accept_count:
             result_label = "❌ DECLINED"
             color = discord.Color.red()
             dm_msg = (
-                f"❌ Your ban appeal for Roblox user **{data['roblox_username']}** has been **declined** ."
+                f"❌ Your ban appeal for Roblox user **{data['roblox_username']}** has been **declined**."
             )
         else:
             result_label = "⚖️ TIE — No decision"
@@ -218,8 +263,8 @@ class AppealVoteView(ui.View):
                     i,
                     name="Final Result",
                     value=(
-                        f"✅ Accept: **{accept_count}** | ❌ Decline: **{decline_count}** \n"
-                        f" **{result_label}** "
+                        f"✅ Accept: **{accept_count}** | ❌ Decline: **{decline_count}**\n"
+                        f"**{result_label}**"
                     ),
                     inline=False,
                 )
@@ -231,7 +276,7 @@ class AppealVoteView(ui.View):
 
         await interaction.message.edit(embed=embed, view=self)
         await interaction.response.send_message(
-            f"Vote closed. Result: **{result_label}** ", ephemeral=True
+            f"🔒 Vote closed. Result: **{result_label}**", ephemeral=True
         )
 
         applicant = interaction.client.get_user(data["applicant_id"])
@@ -274,7 +319,7 @@ class Appeal(commands.Cog):
         self.bot = bot
 
     @commands.command(name="appeal")
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
     async def appeal(self, ctx: commands.Context, *, user: discord.Member = None) -> None:
         """
         Send a ban appeal form to a user.
@@ -307,7 +352,7 @@ class Appeal(commands.Cog):
             embed = discord.Embed(
                 description=(
                     "❌ Please specify a user or use this command inside a ModMail thread.\n\n"
-                    " **Usage:** \n"
+                    "**Usage:**\n"
                     "`?appeal @user` - Send appeal to mentioned user\n"
                     "`?appeal user_id` - Send appeal to user by ID\n"
                     "`?appeal` - (in thread) Send appeal to thread recipient"
@@ -347,7 +392,7 @@ class Appeal(commands.Cog):
             embed = discord.Embed(
                 description=(
                     f"❌ Could not DM {applicant.mention}.\n"
-                    " **Possible reasons:** \n"
+                    "**Possible reasons:**\n"
                     "• User has DMs disabled\n"
                     "• User has blocked the bot\n"
                     "• User is not in a mutual server with the bot"
