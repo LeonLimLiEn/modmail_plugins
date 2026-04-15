@@ -8,7 +8,7 @@ import logging
 # ============================================================
 # CREDENTIALS — fill these in before running
 # ============================================================
-APPEAL_CHANNEL_ID = 000000000000000000   # staff appeal review channel ID
+APPEAL_CHANNEL_ID = 1493584131458728076   # staff appeal review channel ID
 STAFF_ROLE_ID = 1458475722040672288        # staff role ID who can vote
 # ============================================================
 
