@@ -319,7 +319,7 @@ class Appeal(commands.Cog):
         self.bot = bot
 
     @commands.command(name="appeal")
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_permissions(PermissionLevel.MODERATOR)
     async def appeal(self, ctx: commands.Context, *, user: discord.Member = None) -> None:
         """
         Send a ban appeal form to a user.
