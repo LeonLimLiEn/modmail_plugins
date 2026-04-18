@@ -23,18 +23,25 @@ class Furrify(commands.Cog):
 
             await ctx.send("🐾 Furrifying...")
 
-            # avatar
-            avatar_url = target.display_avatar.replace(format="png", size=512).url
+            # -------------------------
+            # FIXED AVATAR FETCH (ROBUST)
+            # -------------------------
+            avatar_url = str(
+                target.display_avatar.with_format("png").with_size(512)
+            )
 
             async with aiohttp.ClientSession() as session:
                 async with session.get(avatar_url) as resp:
                     if resp.status != 200:
-                        return await ctx.send("❌ Failed to download avatar.")
+                        return await ctx.send("❌ Failed to fetch avatar.")
                     avatar_bytes = await resp.read()
 
+            # Ensure valid image
             avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA")
 
-            # overlay path
+            # -------------------------
+            # SAFE OVERLAY LOADING
+            # -------------------------
             base_dir = os.path.dirname(os.path.abspath(__file__))
             overlay_path = os.path.join(base_dir, "furry_ears.png")
 
@@ -42,8 +49,13 @@ class Furrify(commands.Cog):
                 return await ctx.send("❌ Missing furry_ears.png in plugin folder.")
 
             overlay = Image.open(overlay_path).convert("RGBA")
+
+            # Resize overlay properly
             overlay = overlay.resize(avatar.size)
 
+            # -------------------------
+            # COMBINE IMAGES
+            # -------------------------
             combined = Image.alpha_composite(avatar, overlay)
 
             buffer = BytesIO()
@@ -57,6 +69,7 @@ class Furrify(commands.Cog):
                 description=f"{target.mention} has been successfully furrified.",
                 color=discord.Color.purple()
             )
+
             embed.set_image(url="attachment://furrified.png")
 
             await ctx.send(file=file, embed=embed)
