@@ -1,4 +1,4 @@
-afrom __future__ import annotations
+from __future__ import annotations
 
 import discord
 from discord.ext import commands
@@ -16,42 +16,69 @@ class Furrify(commands.Cog):
         self.bot = bot
 
     @commands.command(name="furrify")
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)  # ✅ Modmail admin
     async def furrify(self, ctx, member: discord.Member = None):
-        target = member or ctx.author
+        try:
+            # -----------------------------
+            # MANUAL PERMISSION CHECK (IMPORTANT)
+            # -----------------------------
+            if not await self.bot.config.get_user_permission_level(ctx.author) >= PermissionLevel.ADMINISTRATOR:
+                return await ctx.send("❌ You don’t have permission to use this command (Administrator required).")
 
-        avatar_url = target.display_avatar.replace(format="png", size=512).url
+            target = member or ctx.author
 
-        # Download avatar
-        async with aiohttp.ClientSession() as session:
-            async with session.get(avatar_url) as resp:
-                avatar_bytes = await resp.read()
+            await ctx.send("🐾 Furrifying...")
 
-        avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA")
+            # -----------------------------
+            # GET AVATAR
+            # -----------------------------
+            avatar_url = target.display_avatar.replace(format="png", size=512).url
 
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        overlay_path = os.path.join(base_dir, "furry_ears.png")
+            async with aiohttp.ClientSession() as session:
+                async with session.get(avatar_url) as resp:
+                    if resp.status != 200:
+                        return await ctx.send("❌ Could not download the user's avatar.")
+                    avatar_bytes = await resp.read()
 
-        overlay = Image.open(overlay_path).convert("RGBA")
-        overlay = overlay.resize(avatar.size)
+            avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA")
 
-        combined = Image.alpha_composite(avatar, overlay)
+            # -----------------------------
+            # CHECK OVERLAY FILE
+            # -----------------------------
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            overlay_path = os.path.join(base_dir, "furry_ears.png")
 
-        buffer = BytesIO()
-        combined.save(buffer, format="PNG")
-        buffer.seek(0)
+            if not os.path.exists(overlay_path):
+                return await ctx.send(
+                    "❌ Missing required file: `furry_ears.png`\n"
+                    "Please upload it to the plugin folder."
+                )
 
-        file = discord.File(buffer, filename="furrified.png")
+            overlay = Image.open(overlay_path).convert("RGBA")
+            overlay = overlay.resize(avatar.size)
 
-        embed = discord.Embed(
-            title="🐾 Furrification Complete",
-            description=f"{target.mention} has been successfully furrified.",
-            color=discord.Color.purple()
-        )
+            # -----------------------------
+            # COMBINE IMAGES
+            # -----------------------------
+            combined = Image.alpha_composite(avatar, overlay)
 
-        embed.set_image(url="attachment://furrified.png")
+            buffer = BytesIO()
+            combined.save(buffer, format="PNG")
+            buffer.seek(0)
 
-        await ctx.send(file=file, embed=embed)
+            file = discord.File(buffer, filename="furrified.png")
+
+            embed = discord.Embed(
+                title="🐾 Furrification Complete",
+                description=f"{target.mention} has been successfully furrified.",
+                color=discord.Color.purple()
+            )
+            embed.set_image(url="attachment://furrified.png")
+
+            await ctx.send(file=file, embed=embed)
+
+        except Exception as e:
+            await ctx.send(f"❌ Unexpected error:\n```{e}```")
+            raise
 
 
 async def setup(bot):
