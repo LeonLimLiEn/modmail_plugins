@@ -16,49 +16,34 @@ class Furrify(commands.Cog):
         self.bot = bot
 
     @commands.command(name="furrify")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def furrify(self, ctx, member: discord.Member = None):
         try:
-            # -----------------------------
-            # MANUAL PERMISSION CHECK (IMPORTANT)
-            # -----------------------------
-            if not await self.bot.config.get_user_permission_level(ctx.author) >= PermissionLevel.ADMINISTRATOR:
-                return await ctx.send("❌ You don’t have permission to use this command (Administrator required).")
-
             target = member or ctx.author
 
             await ctx.send("🐾 Furrifying...")
 
-            # -----------------------------
-            # GET AVATAR
-            # -----------------------------
+            # avatar
             avatar_url = target.display_avatar.replace(format="png", size=512).url
 
             async with aiohttp.ClientSession() as session:
                 async with session.get(avatar_url) as resp:
                     if resp.status != 200:
-                        return await ctx.send("❌ Could not download the user's avatar.")
+                        return await ctx.send("❌ Failed to download avatar.")
                     avatar_bytes = await resp.read()
 
             avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA")
 
-            # -----------------------------
-            # CHECK OVERLAY FILE
-            # -----------------------------
+            # overlay path
             base_dir = os.path.dirname(os.path.abspath(__file__))
             overlay_path = os.path.join(base_dir, "furry_ears.png")
 
             if not os.path.exists(overlay_path):
-                return await ctx.send(
-                    "❌ Missing required file: `furry_ears.png`\n"
-                    "Please upload it to the plugin folder."
-                )
+                return await ctx.send("❌ Missing furry_ears.png in plugin folder.")
 
             overlay = Image.open(overlay_path).convert("RGBA")
             overlay = overlay.resize(avatar.size)
 
-            # -----------------------------
-            # COMBINE IMAGES
-            # -----------------------------
             combined = Image.alpha_composite(avatar, overlay)
 
             buffer = BytesIO()
