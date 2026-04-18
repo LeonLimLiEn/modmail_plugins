@@ -3,7 +3,7 @@ from __future__ import annotations
 import discord
 from discord.ext import commands
 import aiohttp
-from PIL import Image
+from PIL import Image, ImageOps
 from io import BytesIO
 import os
 
@@ -24,7 +24,7 @@ class Furrify(commands.Cog):
             await ctx.send("🐾 Furrifying...")
 
             # -------------------------
-            # FIXED AVATAR FETCH (ROBUST)
+            # GET AVATAR (FIXED + RELIABLE)
             # -------------------------
             avatar_url = str(
                 target.display_avatar.with_format("png").with_size(512)
@@ -33,14 +33,18 @@ class Furrify(commands.Cog):
             async with aiohttp.ClientSession() as session:
                 async with session.get(avatar_url) as resp:
                     if resp.status != 200:
-                        return await ctx.send("❌ Failed to fetch avatar.")
+                        return await ctx.send("❌ Failed to download avatar.")
                     avatar_bytes = await resp.read()
 
-            # Ensure valid image
             avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA")
 
             # -------------------------
-            # SAFE OVERLAY LOADING
+            # CENTER CROP (FIXED)
+            # -------------------------
+            avatar = ImageOps.fit(avatar, (512, 512), method=Image.LANCZOS)
+
+            # -------------------------
+            # LOAD OVERLAY SAFELY
             # -------------------------
             base_dir = os.path.dirname(os.path.abspath(__file__))
             overlay_path = os.path.join(base_dir, "furry_ears.png")
@@ -49,15 +53,16 @@ class Furrify(commands.Cog):
                 return await ctx.send("❌ Missing furry_ears.png in plugin folder.")
 
             overlay = Image.open(overlay_path).convert("RGBA")
-
-            # Resize overlay properly
-            overlay = overlay.resize(avatar.size)
+            overlay = overlay.resize((512, 512))
 
             # -------------------------
-            # COMBINE IMAGES
+            # COMBINE
             # -------------------------
             combined = Image.alpha_composite(avatar, overlay)
 
+            # -------------------------
+            # OUTPUT
+            # -------------------------
             buffer = BytesIO()
             combined.save(buffer, format="PNG")
             buffer.seek(0)
@@ -69,7 +74,6 @@ class Furrify(commands.Cog):
                 description=f"{target.mention} has been successfully furrified.",
                 color=discord.Color.purple()
             )
-
             embed.set_image(url="attachment://furrified.png")
 
             await ctx.send(file=file, embed=embed)
