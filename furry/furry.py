@@ -1,10 +1,11 @@
-from __future__ import annotations
+afrom __future__ import annotations
 
 import discord
 from discord.ext import commands
 import aiohttp
 from PIL import Image
 from io import BytesIO
+import os
 
 from core import checks
 from core.models import PermissionLevel
@@ -28,8 +29,10 @@ class Furrify(commands.Cog):
 
         avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA")
 
-        # Overlay
-        overlay = Image.open("furry_ears.png").convert("RGBA")
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        overlay_path = os.path.join(base_dir, "furry_ears.png")
+
+        overlay = Image.open(overlay_path).convert("RGBA")
         overlay = overlay.resize(avatar.size)
 
         combined = Image.alpha_composite(avatar, overlay)
