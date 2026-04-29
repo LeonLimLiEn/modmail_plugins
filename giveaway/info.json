@@ -1,0 +1,23 @@
+{
+    "name": "Giveaway",
+    "description": [
+        "An enhanced giveaway plugin for Modmail.",
+        "",
+        "Features:",
+        "- Button-based entry (no reactions required).",
+        "- Database-backed entrant list — winners are guaranteed to be drawn even if reactions are lost or rate-limited.",
+        "- Self-healing finalizer: if Discord errors mid-end, the bot retries until the winner is announced.",
+        "- On-startup catch-up: giveaways that ended while the bot was offline are resolved immediately.",
+        "- Native Discord countdown timestamps (no per-minute embed edits).",
+        "- Optional required role, bonus entries for roles, winner DMs, end-now, pause/resume, edit, and reroll-by-position.",
+        "",
+        "Version: v{0}"
+    ],
+    "author": "you",
+    "version": "2.0.0",
+    "tags": [
+        "giveaway",
+        "buttons",
+        "events"
+    ]
+}
