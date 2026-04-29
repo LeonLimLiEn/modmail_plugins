@@ -47,4 +47,4 @@ class GiveawayModal(Modal):
         self.view = view
         self.view.modals.append(self)
         for key, value in self.view.input_map.items():
-          
+            
