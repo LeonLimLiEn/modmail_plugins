@@ -1,10 +1,10 @@
 {
     "name": "Giveaway",
     "description": [
-        "An enhanced giveaway plugin for Modmail.",
+        "A giveaway plugin for Modmail.",
         "",
         "Features:",
-        "- Button-based entry (no reactions required).",
+        "- Button-based entry.",
         "- Database-backed entrant list — winners are guaranteed to be drawn even if reactions are lost or rate-limited.",
         "- Self-healing finalizer: if Discord errors mid-end, the bot retries until the winner is announced.",
         "- On-startup catch-up: giveaways that ended while the bot was offline are resolved immediately.",
@@ -13,7 +13,7 @@
         "",
         "Version: v{0}"
     ],
-    "author": "you",
+    "author": "slayinglooty",
     "version": "2.0.0",
     "tags": [
         "giveaway",
