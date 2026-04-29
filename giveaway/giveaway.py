@@ -85,10 +85,15 @@ class Giveaway(commands.Cog):
 
         giveaways = config.get("giveaways", {})
         for message_id, giveaway in giveaways.items():
-            if self._get_giveaway_session(int(message_id)) is not None:
+            mid = int(message_id)
+            if self._get_giveaway_session(mid) is not None:
                 continue
             session = GiveawaySession.start(self, giveaway)
             self.active_giveaways.append(session)
+            # Bind the persistent entry view to this specific message so
+            # button clicks route correctly after a restart.
+            if self._entry_view is not None:
+                self.bot.add_view(self._entry_view, message_id=mid)
 
     async def _update_db(self) -> None:
         async with self._db_lock:
@@ -325,7 +330,13 @@ class Giveaway(commands.Cog):
         if not view.giveaway_ready:
             return
 
-        message = await channel.send(**view.send_params(), view=EntryView(self))
+        # Reuse the single persistent EntryView created in cog_load instead
+        # of leaking a new view object on every giveaway.
+        entry_view = self._entry_view or EntryView(self)
+        message = await channel.send(**view.send_params(), view=entry_view)
+        # Bind the persistent view to this new message id so its buttons
+        # keep working after restarts.
+        self.bot.add_view(entry_view, message_id=message.id)
         await ctx.send(f"Done. Giveaway has been posted in {channel.mention}.")
 
         data = {
@@ -517,130 +528,4 @@ class Giveaway(commands.Cog):
             try:
                 converted = await time_converter(ctx, value, now=discord.utils.utcnow())
             except (commands.BadArgument, commands.CommandError):
-                raise commands.BadArgument(f"Bad duration. Try: `{duration_syntax}`")
-            session.ends = converted.dt.timestamp()
-            # Restart the task so the new end time takes effect.
-            if session._task and not session._task.done():
-                session._task.cancel()
-            session._task = self.bot.loop.create_task(session._run())
-            session._task.add_done_callback(session._task_done)
-        else:
-            raise commands.BadArgument("Field must be one of: prize, winners, duration.")
-
-        await self._update_db()
-        await self._refresh_live_embed(session)
-        await ctx.send(f"Updated `{field}` for giveaway `{message_id}`.")
-
-    async def _refresh_live_embed(self, session: GiveawaySession) -> None:
-        if session.message is None or not session.message.embeds:
-            return
-        embed = session.message.embeds[0]
-        end_dt = datetime.fromtimestamp(session.ends)
-        # Rebuild fields cleanly so prize / winners / time edits all show up.
-        embed.clear_fields()
-        embed.add_field(name=f"{GIFT} Prize", value=session.giveaway_item, inline=False)
-        embed.add_field(name="Hosted by", value=f"<@{session.host_id}>" if session.host_id else "Unknown", inline=True)
-        embed.add_field(name="Entries", value=f"**{len(session.entrants)}**", inline=True)
-        embed.add_field(
-            name="Ends",
-            value=(
-                f"{discord.utils.format_dt(end_dt, 'R')}\n"
-                f"({discord.utils.format_dt(end_dt, 'F')})"
-            ),
-            inline=False,
-        )
-        if session.required_role_id:
-            embed.add_field(name=f"{LOCK} Required role", value=f"<@&{session.required_role_id}>", inline=False)
-        embed.set_footer(text=f"{session.winners_count} winner{'s' if session.winners_count > 1 else ''} • Ends")
-        embed.timestamp = end_dt
-        try:
-            await session.message.edit(embed=embed)
-        except discord.HTTPException:
-            pass
-
-    @giveaway.command(name="list")
-    @checks.has_permissions(PermissionLevel.MODERATOR)
-    async def gaway_list(self, ctx: commands.Context):
-        """List all active giveaways."""
-        embed = discord.Embed(title="Active giveaways", color=self.bot.main_color)
-        lines: List[str] = []
-        for n, session in enumerate(self.active_giveaways, start=1):
-            try:
-                message = session.message or await session.channel.fetch_message(session.id)
-                jump = message.jump_url
-            except Exception:
-                jump = "(unavailable)"
-            status = "PAUSED" if session.paused else "RUNNING"
-            lines.append(
-                f"**{n}.** [{session.giveaway_item}]({jump}) — {status}\n"
-                f"Entries: {len(session.entrants)} • "
-                f"Ends: {discord.utils.format_dt(datetime.fromtimestamp(session.ends), 'R')}"
-            )
-        embed.description = "\n\n".join(lines) if lines else "No active giveaways."
-        await ctx.send(embed=embed)
-
-    @giveaway.command(name="bonus")
-    @checks.has_permissions(PermissionLevel.MODERATOR)
-    async def bonus_cmd(
-        self,
-        ctx: commands.Context,
-        message_id: int,
-        role: discord.Role,
-        extra_entries: int,
-    ):
-        """
-        Grant a role bonus entries on a running giveaway.
-
-        **Usage:** `{prefix}giveaway bonus <message_id> <role> <extra_entries>`
-
-        Set `extra_entries` to 0 to remove the bonus.
-        """
-        session = self._get_giveaway_session(message_id)
-        if session is None:
-            raise commands.BadArgument("No active giveaway with that ID.")
-        if extra_entries < 0 or extra_entries > 25:
-            raise commands.BadArgument("Extra entries must be between 0 and 25.")
-        if extra_entries == 0:
-            session.bonus_entries.pop(role.id, None)
-        else:
-            session.bonus_entries[role.id] = extra_entries
-        await self._update_db()
-        await ctx.send(
-            f"Set {role.mention} bonus to **{extra_entries}** extra entries.",
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-    # --------------------------------------------------------------- events
-
-    @commands.Cog.listener()
-    async def on_giveaway_end(self, session: GiveawaySession) -> None:
-        """
-        Cleanup hook: remove the session from active list, archive its
-        entrants to the history collection so reroll keeps working.
-        """
-        if session in self.active_giveaways:
-            self.active_giveaways.remove(session)
-        try:
-            await self.db.find_one_and_update(
-                {"_id": "config"},
-                {
-                    "$set": {
-                        f"history.{session.id}": {
-                            "item": session.giveaway_item,
-                            "winners": session.winners_count,
-                            "entrants": list(session.entrants),
-                            "ended_at": discord.utils.utcnow().timestamp(),
-                            "channel": session.channel_id,
-                            "guild": session.guild_id,
-                        }
-                    }
-                },
-                upsert=True,
-            )
-        except Exception as exc:  # pragma: no cover
-            logger.warning("Failed to archive giveaway %s: %s", session.id, exc)
-        await self._update_db()
-
-
-async def setup(bot: "ModmailBot") -> None:
-    await bot.add_cog(Giveaway(bot))
+                raise commands.BadArgument(f"Bad duration. Try: `{dur
