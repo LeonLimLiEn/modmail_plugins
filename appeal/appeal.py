@@ -30,6 +30,11 @@ async def _is_modmail_admin(bot: commands.Bot, interaction: discord.Interaction)
     """
     Return (True, "") if the user has Modmail ADMINISTRATOR level or higher.
     Return (False, reason) otherwise so the caller can show a useful message.
+
+    Modmail stores permissions in bot.config["level_permissions"] as:
+        { "OWNER": ["user_id", "role_id", ...], "ADMINISTRATOR": [...], ... }
+    A value of -1 means the guild's default role (everyone).
+    Bot owner (via is_owner) always passes.
     """
     if interaction.guild is None:
         return False, "This must be used inside a server."
@@ -38,16 +43,33 @@ async def _is_modmail_admin(bot: commands.Bot, interaction: discord.Interaction)
     if member is None:
         return False, f"Could not resolve your member object (id: {interaction.user.id})."
 
+    # 1. Bot owner always passes
     try:
-        level = await bot.get_permission_level(member)
+        if await bot.is_owner(member):
+            return True, ""
+    except Exception:
+        pass
+
+    # 2. Read level_permissions from modmail config
+    try:
+        level_permissions: dict = bot.config.get("level_permissions", {})
     except Exception as e:
-        logger.error(f"get_permission_level raised for {member}: {e}", exc_info=True)
-        return False, f"Permission check error: `{type(e).__name__}: {e}`"
+        return False, f"Could not read bot config: `{type(e).__name__}: {e}`"
 
-    if level >= PermissionLevel.ADMINISTRATOR:
-        return True, ""
+    member_ids = {member.id} | {r.id for r in member.roles}
 
-    return False, f"Your Modmail level is `{level}` — need `{PermissionLevel.ADMINISTRATOR}` or higher."
+    # Check OWNER and ADMINISTRATOR levels (both count as "admin or higher")
+    for level_name in ("OWNER", "ADMINISTRATOR"):
+        granted_ids = level_permissions.get(level_name, [])
+        for entry in granted_ids:
+            try:
+                entry_id = int(entry)
+            except (ValueError, TypeError):
+                continue
+            if entry_id in member_ids:
+                return True, ""
+
+    return False, "You do not have Modmail Administrator permissions."
 
 
 def _build_prefilled_inputs(user_id: int) -> dict:
