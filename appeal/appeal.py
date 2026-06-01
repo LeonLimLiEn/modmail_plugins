@@ -26,6 +26,35 @@ _drafts: dict[int, dict] = {}
 
 # ------------------------------------------------------------------ Shared helpers
 
+async def _is_modmail_admin(client: commands.Bot, member: discord.Member) -> bool:
+    """
+    Return True if the member has Modmail ADMINISTRATOR permission level.
+
+    Tries the bot's get_permission_level() first (works on most modmail builds).
+    Falls back to reading admin_roles from the modmail config directly, which is
+    reliable across all versions.
+    """
+    # Primary: use modmail's permission system
+    try:
+        level = await client.get_permission_level(member)
+        return level >= PermissionLevel.ADMINISTRATOR
+    except Exception as e:
+        logger.debug(f"get_permission_level raised {e!r}, falling back to config role check")
+
+    # Fallback: compare member roles against modmail's configured admin_roles
+    try:
+        config = client.config  # modmail stores config on the bot instance
+        raw_admin_roles = config.get("admin_roles") or []
+        admin_role_ids = {int(r) for r in raw_admin_roles}
+        member_role_ids = {r.id for r in member.roles}
+        if admin_role_ids & member_role_ids:
+            return True
+    except Exception as e:
+        logger.warning(f"Config role fallback also failed: {e!r}")
+
+    return False
+
+
 def _build_prefilled_inputs(user_id: int) -> dict:
     """Return saved draft field values for a user, or empty strings."""
     d = _drafts.get(user_id, {})
@@ -380,16 +409,7 @@ class AppealVoteView(ui.View):
             return await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
 
         # Modmail permission check — not Discord's native admin perm
-        try:
-            level = await interaction.client.get_permission_level(interaction.user)
-            is_admin = level >= PermissionLevel.ADMINISTRATOR
-        except Exception as e:
-            logger.error(f"Permission level check failed for {interaction.user}: {e}", exc_info=True)
-            return await interaction.response.send_message(
-                "❌ Could not verify your permissions. Please contact a bot owner.", ephemeral=True
-            )
-
-        if not is_admin:
+        if not await _is_modmail_admin(interaction.client, interaction.user):
             return await interaction.response.send_message(
                 "❌ Only Modmail administrators can end the vote.", ephemeral=True
             )
