@@ -26,33 +26,17 @@ _drafts: dict[int, dict] = {}
 
 # ------------------------------------------------------------------ Shared helpers
 
-async def _is_modmail_admin(client: commands.Bot, member: discord.Member) -> bool:
+async def _is_modmail_admin(bot: commands.Bot, interaction: discord.Interaction) -> bool:
     """
-    Return True if the member has Modmail ADMINISTRATOR permission level.
-
-    Tries the bot's get_permission_level() first (works on most modmail builds).
-    Falls back to reading admin_roles from the modmail config directly, which is
-    reliable across all versions.
+    Return True if the interacting user has Modmail ADMINISTRATOR level or higher.
+    Uses the pattern from docs.modmail.dev: resolve the member via guild, then
+    call await bot.get_permission_level(member).
     """
-    # Primary: use modmail's permission system
-    try:
-        level = await client.get_permission_level(member)
-        return level >= PermissionLevel.ADMINISTRATOR
-    except Exception as e:
-        logger.debug(f"get_permission_level raised {e!r}, falling back to config role check")
-
-    # Fallback: compare member roles against modmail's configured admin_roles
-    try:
-        config = client.config  # modmail stores config on the bot instance
-        raw_admin_roles = config.get("admin_roles") or []
-        admin_role_ids = {int(r) for r in raw_admin_roles}
-        member_role_ids = {r.id for r in member.roles}
-        if admin_role_ids & member_role_ids:
-            return True
-    except Exception as e:
-        logger.warning(f"Config role fallback also failed: {e!r}")
-
-    return False
+    member = interaction.guild.get_member(interaction.user.id)
+    if member is None:
+        return False
+    level = await bot.get_permission_level(member)
+    return level >= PermissionLevel.ADMINISTRATOR
 
 
 def _build_prefilled_inputs(user_id: int) -> dict:
@@ -280,6 +264,7 @@ class AppealModal(_AppealFormBase, title="Ban Appeal Application"):
         embed.set_footer(text="Staff: vote below. A Modmail administrator can end the vote at any time.")
 
         view = AppealVoteView(
+            bot=interaction.client,
             applicant_id=self.applicant.id,
             roblox_username=self.roblox_username.value,
         )
@@ -325,8 +310,9 @@ class AppealModal(_AppealFormBase, title="Ban Appeal Application"):
 # ------------------------------------------------------------------ Vote view
 
 class AppealVoteView(ui.View):
-    def __init__(self, applicant_id: int, roblox_username: str):
+    def __init__(self, bot: commands.Bot, applicant_id: int, roblox_username: str):
         super().__init__(timeout=None)
+        self.bot             = bot
         self.applicant_id    = applicant_id
         self.roblox_username = roblox_username
         self.message_id: int | None = None
@@ -409,7 +395,7 @@ class AppealVoteView(ui.View):
             return await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
 
         # Modmail permission check — not Discord's native admin perm
-        if not await _is_modmail_admin(interaction.client, interaction.user):
+        if not await _is_modmail_admin(self.bot, interaction):
             return await interaction.response.send_message(
                 "❌ Only Modmail administrators can end the vote.", ephemeral=True
             )
