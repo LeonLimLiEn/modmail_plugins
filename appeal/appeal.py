@@ -26,17 +26,28 @@ _drafts: dict[int, dict] = {}
 
 # ------------------------------------------------------------------ Shared helpers
 
-async def _is_modmail_admin(bot: commands.Bot, interaction: discord.Interaction) -> bool:
+async def _is_modmail_admin(bot: commands.Bot, interaction: discord.Interaction) -> tuple[bool, str]:
     """
-    Return True if the interacting user has Modmail ADMINISTRATOR level or higher.
-    Uses the pattern from docs.modmail.dev: resolve the member via guild, then
-    call await bot.get_permission_level(member).
+    Return (True, "") if the user has Modmail ADMINISTRATOR level or higher.
+    Return (False, reason) otherwise so the caller can show a useful message.
     """
+    if interaction.guild is None:
+        return False, "This must be used inside a server."
+
     member = interaction.guild.get_member(interaction.user.id)
     if member is None:
-        return False
-    level = await bot.get_permission_level(member)
-    return level >= PermissionLevel.ADMINISTRATOR
+        return False, f"Could not resolve your member object (id: {interaction.user.id})."
+
+    try:
+        level = await bot.get_permission_level(member)
+    except Exception as e:
+        logger.error(f"get_permission_level raised for {member}: {e}", exc_info=True)
+        return False, f"Permission check error: `{type(e).__name__}: {e}`"
+
+    if level >= PermissionLevel.ADMINISTRATOR:
+        return True, ""
+
+    return False, f"Your Modmail level is `{level}` — need `{PermissionLevel.ADMINISTRATOR}` or higher."
 
 
 def _build_prefilled_inputs(user_id: int) -> dict:
@@ -117,7 +128,7 @@ async def _end_vote(
             logger.warning(f"Could not DM user {applicant.id} with appeal result")
 
 
-async def _check_auto_end(bot: commands.Bot, message: discord.Message) -> bool:
+async def _check_auto_end(bot: commands.Bot, message: discord.Message, view: "AppealVoteView") -> bool:
     """
     Check whether every non-bot staff member has cast a vote.
     If so, auto-end the vote and return True.
@@ -137,7 +148,7 @@ async def _check_auto_end(bot: commands.Bot, message: discord.Message) -> bool:
 
     voted_ids = data["accept"] | data["decline"]
     if staff_ids <= voted_ids:
-        await _end_vote(bot, message, "automatic (all staff voted)")
+        await _end_vote(bot, message, "automatic (all staff voted)", view=view)
         await message.channel.send(
             f"🔒 Vote auto-closed — all {len(staff_ids)} staff members have cast their vote."
         )
@@ -363,7 +374,7 @@ class AppealVoteView(ui.View):
 
         await self._refresh_embed(interaction.message)
         await interaction.response.send_message(note, ephemeral=True)
-        await _check_auto_end(interaction.client, interaction.message)
+        await _check_auto_end(self.bot, interaction.message, self)
 
     @ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
     async def decline(self, interaction: discord.Interaction, button: ui.Button) -> None:
@@ -387,7 +398,7 @@ class AppealVoteView(ui.View):
 
         await self._refresh_embed(interaction.message)
         await interaction.response.send_message(note, ephemeral=True)
-        await _check_auto_end(interaction.client, interaction.message)
+        await _check_auto_end(self.bot, interaction.message, self)
 
     @ui.button(label="🔒 End Vote", style=discord.ButtonStyle.secondary)
     async def end_vote(self, interaction: discord.Interaction, button: ui.Button) -> None:
@@ -395,10 +406,9 @@ class AppealVoteView(ui.View):
             return await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
 
         # Modmail permission check — not Discord's native admin perm
-        if not await _is_modmail_admin(self.bot, interaction):
-            return await interaction.response.send_message(
-                "❌ Only Modmail administrators can end the vote.", ephemeral=True
-            )
+        allowed, reason = await _is_modmail_admin(self.bot, interaction)
+        if not allowed:
+            return await interaction.response.send_message(f"❌ {reason}", ephemeral=True)
 
         if not _active_votes.get(interaction.message.id):
             return await interaction.response.send_message("❌ This vote is already closed.", ephemeral=True)
